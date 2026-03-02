@@ -11,13 +11,13 @@
 # Defaults:
 #   BUILD_DIR     = /workspace/build_llm_gpu
 #   MODEL         = auto-detected from /workspace/models/
-#   CHI_BUILD_DIR = /workspace/build
+#   CHI_BUILD_DIR = /workspace/build_llm_gpu  (same as BUILD_DIR by default)
 
 set -e
 
 BUILD_DIR="${1:-/workspace/build_llm_gpu}"
 MODEL="${2:-}"
-CHI_BUILD_DIR="${3:-/workspace/build}"
+CHI_BUILD_DIR="${3:-$BUILD_DIR}"
 COMPOSE_CFG=/workspace/cte_kvcache_compose.yaml
 PORT=8089
 LOG=/tmp/llama_server_gpu_e2e.log
@@ -28,7 +28,7 @@ export LD_LIBRARY_PATH="$CHI_BUILD_DIR/bin:$BUILD_DIR/bin:/usr/local/cuda-12.8/l
 
 [ -f "$BUILD_DIR/bin/llama-server" ]           || die "llama-server not found in $BUILD_DIR/bin"
 [ -f "$BUILD_DIR/bin/libwrp_llm_kvcache.so" ]  || die "libwrp_llm_kvcache.so not found in $BUILD_DIR/bin"
-[ -f "$CHI_BUILD_DIR/bin/chimaera_start_runtime" ] || die "chimaera_start_runtime not found in $CHI_BUILD_DIR/bin"
+[ -f "$CHI_BUILD_DIR/bin/chimaera" ]           || die "chimaera CLI not found in $CHI_BUILD_DIR/bin"
 [ -f "$COMPOSE_CFG" ]                           || die "CTE compose YAML not found: $COMPOSE_CFG"
 
 if [ -z "$MODEL" ]; then
@@ -41,16 +41,17 @@ fi
 # ─── CTE runtime ─────────────────────────────────────────────────────────────
 echo "=== Starting Chimaera CTE runtime ==="
 export CHI_SERVER_CONF=$COMPOSE_CFG
-"$CHI_BUILD_DIR/bin/chimaera_start_runtime" > /tmp/chimaera_gpu_e2e.log 2>&1 &
+"$CHI_BUILD_DIR/bin/chimaera" runtime start > /tmp/chimaera_gpu_e2e.log 2>&1 &
 CTE_PID=$!
-sleep 4
-"$CHI_BUILD_DIR/bin/chimaera_compose" $COMPOSE_CFG >> /tmp/chimaera_gpu_e2e.log 2>&1
+sleep 6
+# New Chimaera runs compose during runtime start (ServerInit),
+# so no separate compose command needed.
 echo "CTE runtime PID=$CTE_PID"
 
 cleanup() {
     echo "=== Stopping server and CTE ==="
     kill $SERVER_PID 2>/dev/null || true
-    "$CHI_BUILD_DIR/bin/chimaera_stop_runtime" 2>/dev/null || true
+    "$CHI_BUILD_DIR/bin/chimaera" runtime stop 2>/dev/null || true
     wait $CTE_PID 2>/dev/null || true
 }
 trap cleanup EXIT
