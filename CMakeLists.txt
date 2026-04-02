@@ -37,6 +37,26 @@ option(WRP_CORE_ENABLE_DOCKER_CI "Enable Docker-based integration tests (require
 option(BUILD_SHARED_LIBS "Build shared libraries (.dll/.so) instead of static ones (.lib/.a)" ON)
 option(WRP_CORE_STATIC_DEPS "Link external dependencies statically (for self-contained wheels)" OFF)
 
+#------------------------------------------------------------------------------
+# Rust Bindings Configuration
+#------------------------------------------------------------------------------
+option(WRP_CORE_ENABLE_RUST "Enable Rust bindings (requires Corrosion)" OFF)
+if(WRP_CORE_ENABLE_RUST)
+    message(STATUS "Rust bindings enabled - configuring Corrosion")
+    
+    # Fetch Corrosion
+    include(FetchContent)
+    FetchContent_Declare(
+        Corrosion
+        GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+        GIT_TAG v0.5.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(Corrosion)
+    
+    message(STATUS "Corrosion configured - Rust bindings available")
+endif()
+
 # Installation Prefix Configuration
 # - For Conda builds: Set CMAKE_INSTALL_PREFIX via -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX
 # - For custom installs: Set CMAKE_INSTALL_PREFIX to desired root directory

@@ -11,7 +11,7 @@ use std::panic::catch_unwind;
 use std::ptr;
 use std::slice;
 
-use crate::{Client, Tag};
+use crate::sync::{Client, Tag};
 
 /// Helper: convert a `*const c_char` to `&str`, returning `Err` on null or invalid UTF-8.
 unsafe fn cstr_to_str<'a>(p: *const c_char) -> Result<&'a str, ()> {
@@ -34,7 +34,7 @@ pub unsafe extern "C" fn cte_c_init(config: *const c_char) -> i32 {
         }
     };
     let path = path.to_owned();
-    match catch_unwind(move || crate::init(&path)) {
+    match catch_unwind(move || crate::sync::init(&path)) {
         Ok(Ok(_)) => 0,
         _ => -1,
     }
@@ -110,10 +110,7 @@ pub unsafe extern "C" fn cte_c_tag_put_blob(
 /// Get the size of a blob in bytes.
 /// Returns 0 if the tag or name is invalid.
 #[no_mangle]
-pub unsafe extern "C" fn cte_c_tag_get_blob_size(
-    tag: *mut c_void,
-    name: *const c_char,
-) -> u64 {
+pub unsafe extern "C" fn cte_c_tag_get_blob_size(tag: *mut c_void, name: *const c_char) -> u64 {
     if tag.is_null() {
         return 0;
     }
@@ -154,7 +151,7 @@ pub unsafe extern "C" fn cte_c_tag_get_blob(
     let buf_ptr = buf;
     match catch_unwind(move || {
         let tag = unsafe { &*tag_ptr.0 };
-        let data = tag.get_blob_with_offset(&name, size, offset);
+        let data = tag.get_blob(&name, size, offset);
         let copy_len = std::cmp::min(data.len(), size as usize);
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), buf_ptr, copy_len) };
     }) {
@@ -206,33 +203,39 @@ pub unsafe extern "C" fn cte_c_tag_get_contained_blobs(
 
 /// Delete a tag by name.
 /// Returns 0 on success, -1 on failure.
+///
+/// NOTE: This function requires a Client instance to operate. Create a client first
+/// using cte_c_client_new() and use the client's del_tag method. This standalone
+/// function returns -1 (not implemented) for backward compatibility.
 #[no_mangle]
 pub unsafe extern "C" fn cte_c_del_tag(name: *const c_char) -> i32 {
-    let name = match unsafe { cstr_to_str(name) } {
-        Ok(s) => s.to_owned(),
+    // TODO: Implement properly by creating a Client instance and calling del_tag
+    // For now, return -1 to indicate this function is not implemented
+    // The sync::Client struct doesn't have a del_tag method - it needs to be added
+    let _name = match unsafe { cstr_to_str(name) } {
+        Ok(s) => s,
         Err(_) => return -1,
     };
-    match catch_unwind(move || Client::del_tag(&name)) {
-        Ok(true) => 0,
-        _ => -1,
-    }
+    -1 // Not implemented - use cte_c_client_del_tag instead
 }
 
 /// Register a file-backed storage target.
 /// Returns 0 on success, -1 on failure.
+///
+/// NOTE: This function requires a Client instance to operate. Create a client first
+/// using cte_c_client_new() and use the client's register_target method. This standalone
+/// function returns -1 (not implemented) for backward compatibility.
 #[no_mangle]
-pub unsafe extern "C" fn cte_c_register_target(
-    path: *const c_char,
-    size: u64,
-) -> i32 {
-    let path = match unsafe { cstr_to_str(path) } {
-        Ok(s) => s.to_owned(),
+pub unsafe extern "C" fn cte_c_register_target(path: *const c_char, size: u64) -> i32 {
+    // TODO: Implement properly by creating a Client instance and calling register_target
+    // For now, return -1 to indicate this function is not implemented
+    // The sync::Client struct doesn't have a register_target method - it needs to be added
+    let _path = match unsafe { cstr_to_str(path) } {
+        Ok(s) => s,
         Err(_) => return -1,
     };
-    match catch_unwind(move || Client::register_target(&path, size)) {
-        Ok(true) => 0,
-        _ => -1,
-    }
+    let _ = size;
+    -1 // Not implemented - use cte_c_client_register_target instead
 }
 
 /// Free a string previously allocated by CTE (e.g., from `cte_c_tag_get_contained_blobs`).

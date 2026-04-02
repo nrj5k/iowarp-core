@@ -66,6 +66,33 @@ endif()
 # Add wrapper components (includes Python bindings if enabled)
 add_subdirectory(wrapper)
 
+#------------------------------------------------------------------------------
+# Rust Bindings Configuration
+#------------------------------------------------------------------------------
+if(WRP_CORE_ENABLE_RUST)
+    if(NOT COMMAND corrosion_import_crate)
+        message(WARNING "WRP_CORE_ENABLE_RUST is ON but Corrosion not found. Ensure CMakeLists.txt root fetched Corrosion.")
+    else()
+        message(STATUS "Building CTE Rust bindings - Corrosion configured")
+        
+        # Export paths for build.rs
+        # Use HSHM_ROOT from context-transport-primitives for include directory
+        set_property(GLOBAL PROPERTY IOWARP_INCLUDE_DIR "${HSHM_ROOT}/include")
+        set_property(GLOBAL PROPERTY IOWARP_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
+        
+        # Import Rust crate
+        corrosion_import_crate(
+            MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust/Cargo.toml
+            FEATURES async
+        )
+        
+        # Dependency: CTE client must be built first
+        add_dependencies(wrp-cte-rs wrp_cte_core_client)
+        
+        message(STATUS "CTE Rust bindings configured: wrp-cte-rs")
+    endif()
+endif()
+
 # Add benchmarks if enabled
 # Benchmarks are controlled by WRP_CORE_ENABLE_BENCHMARKS
 if(WRP_CORE_ENABLE_BENCHMARKS)
