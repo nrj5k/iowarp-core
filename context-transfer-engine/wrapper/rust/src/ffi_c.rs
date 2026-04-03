@@ -11,7 +11,7 @@ use std::panic::catch_unwind;
 use std::ptr;
 use std::slice;
 
-use crate::sync::{Client, Tag};
+use crate::sync::Tag;
 
 /// Helper: convert a `*const c_char` to `&str`, returning `Err` on null or invalid UTF-8.
 unsafe fn cstr_to_str<'a>(p: *const c_char) -> Result<&'a str, ()> {
@@ -92,6 +92,10 @@ pub unsafe extern "C" fn cte_c_tag_put_blob(
         Err(_) => return -1,
     };
     let data = unsafe { slice::from_raw_parts(data, len as usize) };
+    // Validate score
+    if score < 0.0 || score > 1.0 {
+        return -1;
+    }
     // Tag is not UnwindSafe, so use AssertUnwindSafe
     let tag_ptr = std::panic::AssertUnwindSafe(tag_ref as *const Tag);
     let data_ptr = data.as_ptr();
@@ -100,15 +104,16 @@ pub unsafe extern "C" fn cte_c_tag_put_blob(
     match catch_unwind(move || {
         let tag = unsafe { &*tag_ptr.0 };
         let data = unsafe { slice::from_raw_parts(data_ptr, data_len) };
-        tag.put_blob_with_options(&name, data, offset, score);
+        tag.put_blob_with_options(&name, data, offset, score)
     }) {
-        Ok(_) => 0,
+        Ok(Ok(())) => 0,
+        Ok(Err(_)) => -1, // Validation error
         Err(_) => -1,
     }
 }
 
 /// Get the size of a blob in bytes.
-/// Returns 0 if the tag or name is invalid.
+/// Returns 0 if the tag or name is invalid or if validation fails.
 #[no_mangle]
 pub unsafe extern "C" fn cte_c_tag_get_blob_size(tag: *mut c_void, name: *const c_char) -> u64 {
     if tag.is_null() {
@@ -124,7 +129,8 @@ pub unsafe extern "C" fn cte_c_tag_get_blob_size(tag: *mut c_void, name: *const 
         let tag = unsafe { &*tag_ptr.0 };
         tag.get_blob_size(&name)
     }) {
-        Ok(size) => size,
+        Ok(Ok(size)) => size,
+        Ok(Err(_)) => 0, // Validation error
         Err(_) => 0,
     }
 }
@@ -151,11 +157,16 @@ pub unsafe extern "C" fn cte_c_tag_get_blob(
     let buf_ptr = buf;
     match catch_unwind(move || {
         let tag = unsafe { &*tag_ptr.0 };
-        let data = tag.get_blob(&name, size, offset);
-        let copy_len = std::cmp::min(data.len(), size as usize);
-        unsafe { ptr::copy_nonoverlapping(data.as_ptr(), buf_ptr, copy_len) };
+        match tag.get_blob(&name, size, offset) {
+            Ok(data) => {
+                let copy_len = std::cmp::min(data.len(), size as usize);
+                unsafe { ptr::copy_nonoverlapping(data.as_ptr(), buf_ptr, copy_len) };
+                0i32
+            }
+            Err(_) => -1i32, // Validation error
+        }
     }) {
-        Ok(_) => 0,
+        Ok(rc) => rc,
         Err(_) => -1,
     }
 }

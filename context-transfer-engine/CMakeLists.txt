@@ -76,20 +76,54 @@ if(WRP_CORE_ENABLE_RUST)
         message(STATUS "Building CTE Rust bindings - Corrosion configured")
         
         # Export paths for build.rs
-        # Use HSHM_ROOT from context-transport-primitives for include directory
-        set_property(GLOBAL PROPERTY IOWARP_INCLUDE_DIR "${HSHM_ROOT}/include")
-        set_property(GLOBAL PROPERTY IOWARP_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
+        # Include paths: hermes_shm, chimaera core, chimaera modules, cereal, and CTE headers
+        get_filename_component(HSHM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../context-transport-primitives" ABSOLUTE)
+        get_filename_component(CHIMAERA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../context-runtime" ABSOLUTE)
+        get_filename_component(CTE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
+        get_filename_component(CHIMODS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../context-runtime/modules" ABSOLUTE)
         
+        # Get cereal include directory from CMake target
+        get_target_property(CEREAL_INCLUDE_DIR cereal::cereal INTERFACE_INCLUDE_DIRECTORIES)
+        if(NOT CEREAL_INCLUDE_DIR)
+            # Fallback: find cereal include from cereal_DIR
+            get_filename_component(CEREAL_ROOT "${cereal_DIR}/../../.." ABSOLUTE)
+            set(CEREAL_INCLUDE_DIR "${CEREAL_ROOT}/include")
+        endif()
+        
+        message(STATUS "CTE Rust include paths:")
+        message(STATUS "  HSHM_ROOT: ${HSHM_ROOT}/include")
+        message(STATUS "  CHIMAERA_ROOT: ${CHIMAERA_ROOT}/include")
+        message(STATUS "  CTE_ROOT: ${CTE_ROOT}/core/include")
+        message(STATUS "  CHIMODS_ROOT: ${CHIMODS_ROOT}")
+        message(STATUS "  CEREAL_INCLUDE: ${CEREAL_INCLUDE_DIR}")
+        
+        # Validate ZMQ was found before configuring Rust bindings
+        if(WRP_CORE_ENABLE_ZMQ AND NOT ZMQ_LIBS)
+            message(FATAL_ERROR "ZeroMQ not found but required for Rust bindings. Install with: sudo apt-get install libzmq3-dev")
+        endif()
+
         # Import Rust crate
         corrosion_import_crate(
             MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust/Cargo.toml
             FEATURES async
         )
         
-        # Dependency: CTE client must be built first
-        add_dependencies(wrp-cte-rs wrp_cte_core_client)
+        # Set environment variables for build.rs AFTER target is created
+        # Format: ENV_VAR=value (passed to cargo as environment variables)
+        # Include all ChiMod directories to avoid missing headers
+        corrosion_set_env_vars(wrp_cte 
+            "IOWARP_INCLUDE_DIR=${HSHM_ROOT}/include"
+            "IOWARP_EXTRA_INCLUDES=${CHIMAERA_ROOT}/include:${CTE_ROOT}/core/include:${CHIMODS_ROOT}/admin/include:${CHIMODS_ROOT}/bdev/include:${CEREAL_INCLUDE_DIR}"
+            "IOWARP_LIB_DIR=${CMAKE_BINARY_DIR}/bin"
+            "IOWARP_ZMQ_LIBS=${ZMQ_LIBS}"
+            "IOWARP_ZMQ_LIB_DIRS=${ZMQ_LIB_DIRS}"
+        )
         
-        message(STATUS "CTE Rust bindings configured: wrp-cte-rs")
+        # Dependency: CTE client must be built first
+        # Note: Corrosion creates targets based on [lib] name (wrp_cte), not package name (wrp-cte-rs)
+        add_dependencies(wrp_cte wrp_cte_core_client)
+        
+        message(STATUS "CTE Rust bindings configured: wrp_cte (from package wrp-cte-rs)")
     endif()
 endif()
 

@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["async"]
 sync = []
-async = ["dep:tokio"]
+async = ["sync", "dep:tokio"]
 
 [dependencies]
 cxx = "1.0"

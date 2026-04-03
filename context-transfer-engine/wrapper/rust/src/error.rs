@@ -44,7 +44,7 @@ use std::fmt;
 /// - Initialization failures
 /// - Pool, tag, blob, and target operations
 /// - FFI bridge errors
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum CteError {
     /// Initialization failed
     InitFailed {
@@ -106,14 +106,66 @@ pub enum CteError {
         message: String,
     },
 
-    /// I/O error wrapper
-    IoError(std::io::Error),
+    /// I/O error wrapper (stores error message since std::io::Error is not Clone)
+    IoError {
+        message: String,
+    },
 
     /// Feature not yet implemented
     NotImplemented {
         feature: String,
         reason: String,
     },
+}
+
+impl Clone for CteError {
+    fn clone(&self) -> Self {
+        match self {
+            CteError::InitFailed { reason } => CteError::InitFailed {
+                reason: reason.clone(),
+            },
+            CteError::PoolCreationFailed { message } => CteError::PoolCreationFailed {
+                message: message.clone(),
+            },
+            CteError::PoolNotFound { pool_id } => CteError::PoolNotFound {
+                pool_id: pool_id.clone(),
+            },
+            CteError::TagNotFound { name } => CteError::TagNotFound { name: name.clone() },
+            CteError::TagAlreadyExists { name } => {
+                CteError::TagAlreadyExists { name: name.clone() }
+            }
+            CteError::BlobNotFound { tag, blob } => CteError::BlobNotFound {
+                tag: tag.clone(),
+                blob: blob.clone(),
+            },
+            CteError::BlobIOError { message } => CteError::BlobIOError {
+                message: message.clone(),
+            },
+            CteError::TargetRegistrationFailed { path } => {
+                CteError::TargetRegistrationFailed { path: path.clone() }
+            }
+            CteError::TargetNotFound { path } => CteError::TargetNotFound { path: path.clone() },
+            CteError::TelemetryUnavailable => CteError::TelemetryUnavailable,
+            CteError::InvalidParameter { message } => CteError::InvalidParameter {
+                message: message.clone(),
+            },
+            CteError::RuntimeError { code, message } => CteError::RuntimeError {
+                code: *code,
+                message: message.clone(),
+            },
+            CteError::Timeout => CteError::Timeout,
+            CteError::FfiError { message } => CteError::FfiError {
+                message: message.clone(),
+            },
+            CteError::IoError { message } => CteError::IoError {
+                message: message.clone(),
+            },
+            CteError::NotImplemented { feature, reason } => CteError::NotImplemented {
+                feature: feature.clone(),
+                reason: reason.clone(),
+            },
+        }
+    }
 }
 
 impl fmt::Display for CteError {
@@ -161,8 +213,8 @@ impl fmt::Display for CteError {
             CteError::FfiError { message } => {
                 write!(f, "FFI error: {}", message)
             }
-            CteError::IoError(e) => {
-                write!(f, "I/O error: {}", e)
+            CteError::IoError { message } => {
+                write!(f, "I/O error: {}", message)
             }
             CteError::NotImplemented { feature, reason } => {
                 write!(f, "Feature not implemented: {} - {}", feature, reason)
@@ -174,7 +226,6 @@ impl fmt::Display for CteError {
 impl std::error::Error for CteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            CteError::IoError(e) => Some(e),
             CteError::NotImplemented { .. } => None,
             _ => None,
         }
@@ -183,7 +234,9 @@ impl std::error::Error for CteError {
 
 impl From<std::io::Error> for CteError {
     fn from(err: std::io::Error) -> Self {
-        CteError::IoError(err)
+        CteError::IoError {
+            message: err.to_string(),
+        }
     }
 }
 
@@ -248,7 +301,9 @@ mod tests {
         let cte_err: CteError = io_err.into();
 
         match cte_err {
-            CteError::IoError(_) => {} // OK
+            CteError::IoError { message } => {
+                assert!(message.contains("file not found"));
+            }
             _ => panic!("Expected IoError variant"),
         }
     }

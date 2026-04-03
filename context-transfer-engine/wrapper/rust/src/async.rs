@@ -49,7 +49,11 @@
 //!     let tag = Tag::new("my_dataset").await?;
 //!
 //!     // Store data asynchronously
-//!     tag.put_blob("data.bin".to_string(), b"hello".to_vec(), 0, 1.0).await;
+//!     tag.put_blob("data.bin".to_string(), b"hello".to_vec(), 0, 1.0).await?;
+//!
+//!     // Retrieve data asynchronously
+//!     let data = tag.get_blob("data.bin".to_string(), 5, 0).await?;
+//!     assert_eq!(data, b"hello");
 //!
 //!     // Get telemetry
 //!     let telemetry = client.poll_telemetry(0).await?;
@@ -60,12 +64,155 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! # Thread Safety Guarantees
+//!
+//! This module uses `spawn_blocking` to ensure thread-safe access to C++ objects.
+//! See the `SendableTag` and `SendableClient` wrappers for SAFETY documentation.
 
-pub use crate::sync::{init, BdevType, ChimaeraMode, SteadyTime};
-pub use crate::types::{CteOp, CteTagId, CteTelemetry, PoolQuery};
+pub use crate::sync::init;
+pub use crate::types::{BdevType, ChimaeraMode, CteOp, CteTagId, CteTelemetry, PoolQuery, SteadyTime};
 
 use crate::error::{CteError, CteResult};
-use crate::ffi;
+use crate::ffi::ffi;
+use std::sync::Arc;
+
+/// Wrapper to make Unique_ptr<ffi::Tag> Send for use with spawn_blocking
+///
+/// This wrapper is necessary because `cxx::UniquePtr` does not implement `Send`
+/// by default, which prevents it from being used across thread boundaries.
+///
+/// # Thread Safety
+///
+/// The wrapper ensures thread-safe access through the following mechanisms:
+///
+/// 1. **spawn_blocking Isolation**: The FFI call executes in a dedicated blocking
+///    thread pool managed by tokio. This ensures the C++ code never runs on the
+///    async executor's threads, preventing any potential interference with async
+///    scheduling.
+///
+/// 2. **Single-Threaded Execution**: Each FFI call acquires a mutex lock before
+///    accessing the underlying C++ object. This ensures that only one thread
+///    accesses the Tag at any given time.
+///
+/// 3. **C++ Thread-Safety Guarantees**: The underlying C++ `wrp_cte::core::Tag`
+///    class is designed for single-threaded use within each operation. All state
+///    modifications are completed before returning from FFI calls, and the object
+///    does not maintain internal threads or async state that could cause races.
+///
+/// 4. **No Interior Mutability**: The C++ Tag class does not use interior mutability
+///    patterns that could cause data races. All mutations go through explicit FFI
+///    calls that are synchronized via the mutex.
+///
+/// # SAFETY
+///
+/// This implementation is safe because:
+///
+/// - The `UniquePtr<Tag>` is wrapped in `Arc<Mutex<_>>`, ensuring exclusive access
+///   via the mutex lock before any FFI call.
+///
+/// - `spawn_blocking` guarantees that the closure runs on a dedicated thread pool
+///   separate from the async executor, preventing async runtime interference.
+///
+/// - The underlying C++ `Tag` object does not use callbacks, signals, or any
+///   other mechanism that could cause re-entrancy or cross-thread access.
+///
+/// - The C++ object lifetime is managed by `UniquePtr`, which ensures proper
+///   destruction when the Rust wrapper is dropped. The destructor runs in the
+///   same thread as the last FFI call that held the mutex.
+///
+/// - No mutable static state exists in the C++ Tag implementation that could
+///   cause cross-thread interference.
+struct SendableTag(cxx::UniquePtr<ffi::Tag>);
+
+// SAFETY: SendableTag is safe to send across threads because:
+//
+// 1. MUTEX SYNCHRONIZATION: The Tag is wrapped in Arc<Mutex<SendableTag>>,
+//    ensuring only one thread can access the inner UniquePtr at a time
+//    via lock().unwrap().
+//
+// 2. SPAWN_BLOCKING GUARANTEES: All FFI calls happen inside spawn_blocking,
+//    which runs closures on a dedicated blocking thread pool isolated from
+//    the async executor. This prevents concurrent access to the C++ object.
+//
+// 3. C++ THREAD-SAFETY: The underlying wrp_cte::core::Tag class is designed
+//    for single-threaded use. It doesn't spawn threads, use atomics, or have
+//    any internal concurrency. All state changes are completed before the
+//    FFI call returns.
+//
+// 4. OWNERSHIP MODEL: UniquePtr ensures proper cleanup. The C++ destructor
+//    runs exactly once when the UniquePtr is dropped, always in the same
+//    thread that holds the Arc<Mutex> lock.
+//
+// 5. NO SHINED STATE: The Tag object doesn't expose any interior mutability
+//    or shared state that could cause data races across multiple SendableTag
+//    instances wrapping the same underlying C++ object.
+//
+// IMPORTANT: The Send impl allows the UniquePtr to be moved between threads,
+// but actual FFI calls are still synchronized through Arc<Mutex<_>> to ensure
+// single-threaded access patterns required by the C++ implementation.
+unsafe impl Send for SendableTag {}
+
+/// Wrapper to make unique_ptr<ffi::Client> Send for use with spawn_blocking
+///
+/// This wrapper is necessary because `cxx::UniquePtr` does not implement `Send`
+/// by default, which prevents it from being used across thread boundaries.
+///
+/// # Thread Safety
+///
+/// The wrapper ensures thread-safe access through the following mechanisms:
+///
+/// 1. **spawn_blocking Isolation**: The FFI call executes in a dedicated blocking
+///    thread pool managed by tokio. Each FFI call runs in isolation.
+///
+/// 2. **Per-Call Client Creation**: Unlike Tag, Client objects are created fresh
+///    for each FFI call within the spawn_blocking closure. This eliminates any
+///    need for mutex synchronization since each call gets its own Client instance.
+///
+/// 3. **C++ Thread-Safety Guarantees**: The underlying C++ `wrp_cte::core::Client`
+///    class is stateless - it only communicates with the runtime. All state is
+///    maintained in the runtime process, not in the Client object itself.
+///
+/// # SAFETY
+///
+/// This implementation is safe because:
+///
+/// - Each FFI call creates a temporary `ffi::client_new()` instance that lives
+///   only within the spawn_blocking closure. No state is shared across calls.
+///
+/// - The C++ Client provides a stateless interface to the runtime. The only
+///   shared state is in the runtime process, which uses its own synchronization.
+///
+/// - No mutable static state exists in the C++ Client implementation that could
+///   cause cross-thread interference.
+///
+/// - The UniquePtr is created, used, and destroyed entirely within the
+///   spawn_blocking closure, ensuring proper cleanup in the correct thread.
+struct SendableClient(cxx::UniquePtr<ffi::Client>);
+
+// SAFETY: SendableClient is safe to send across threads because:
+//
+// 1. PER-CALL INSTANCES: Each FFI call creates a fresh Client instance inside
+//    spawn_blocking. No Client is shared across threads or calls.
+//
+// 2. SPAWN_BLOCKING ISOLATION: The closure runs on a dedicated blocking thread
+//    pool, ensuring complete isolation from the async runtime and other blocking
+//    tasks for the duration of the call.
+//
+// 3. C++ STATELESS DESIGN: The underlying wrp_cte::core::Client class is
+//    stateless. It only communicates with the CTE runtime via IPC. All shared
+//    state is in the runtime, which has its own synchronization primitives.
+//
+// 4. IMMEDIATE CLEANUP: The UniquePtr<Client> is dropped at the end of the
+//    spawn_blocking closure, ensuring proper C++ resource cleanup in the same
+//    thread that created it.
+//
+// 5. NO CROSS-CALL STATE: Since each call gets a new Client, there's no
+//    possibility of cross-thread state sharing or race conditions.
+//
+// The Send impl is needed to move the closure into spawn_blocking, but the
+// actual access pattern (create, use, destroy) within the closure is safe.
+unsafe impl Send for SendableClient {}
 
 /// Async CTE client
 ///
@@ -107,25 +254,16 @@ impl Client {
     ///
     /// # Returns
     /// Vector of telemetry entries
-    pub async fn poll_telemetry(&self, min_time: u64) -> CteResult<Vec<CteTelemetry>> {
+    pub async fn poll_telemetry(&self, min_time: u64) -> CteResult<Vec<crate::ffi::CteTelemetry>> {
         tokio::task::spawn_blocking(move || {
-            let client = ffi::client_new();
-            let raw = ffi::client_poll_telemetry(&client, min_time);
-            raw.into_iter()
-                .map(|t| CteTelemetry {
-                    op: t.op.into(),
-                    off: t.off,
-                    size: t.size,
-                    tag_id: (&t.tag_id).into(),
-                    mod_time: (&t.mod_time).into(),
-                    read_time: (&t.read_time).into(),
-                    logical_time: t.logical_time,
-                })
-                .collect::<Vec<_>>()
+            let client = SendableClient(ffi::client_new());
+            let mut raw = Vec::new();
+            ffi::client_poll_telemetry_raw(&client.0, min_time, &mut raw);
+            crate::ffi::parse_telemetry(&raw)
         })
         .await
         .map_err(|e| CteError::FfiError {
-            message: e.to_string(),
+            message: format!("Failed to poll telemetry: spawn_blocking error: {}", e),
         })
     }
 
@@ -133,11 +271,12 @@ impl Client {
     ///
     /// # Arguments
     /// * `tag_id` - ID of the tag containing the blob
-    /// * `name` - Blob name
+    /// * `name` - Blob name (must not be empty)
     /// * `score` - New placement score (0.0-1.0)
     ///
     /// # Returns
     /// * `Ok(())` on success
+    /// * `Err(CteError::InvalidParameter)` if name is empty or score is out of range
     /// * `Err(CteError::RuntimeError)` on failure
     pub async fn reorganize_blob(
         &self,
@@ -145,10 +284,22 @@ impl Client {
         name: String,
         score: f32,
     ) -> CteResult<()> {
+        // Validate inputs
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Blob name cannot be empty".to_string(),
+            });
+        }
+        if score < 0.0 || score > 1.0 {
+            return Err(CteError::InvalidParameter {
+                message: format!("Score must be between 0.0 and 1.0, got {}", score),
+            });
+        }
+
         tokio::task::spawn_blocking(move || {
-            let client = ffi::client_new();
+            let client = SendableClient(ffi::client_new());
             let rc = ffi::client_reorganize_blob(
-                &client,
+                &client.0,
                 tag_id.major,
                 tag_id.minor,
                 &name,
@@ -159,13 +310,16 @@ impl Client {
             } else {
                 Err(CteError::RuntimeError {
                     code: rc as u32,
-                    message: format!("Failed to reorganize blob {}", name),
+                    message: format!(
+                        "Failed to reorganize blob '{}' in tag {}.{} with score {}: error code {}",
+                        name, tag_id.major, tag_id.minor, score, rc
+                    ),
                 })
             }
         })
         .await
         .map_err(|e| CteError::FfiError {
-            message: e.to_string(),
+            message: format!("Reorganize blob spawn_blocking error: {}", e),
         })?
     }
 
@@ -173,16 +327,24 @@ impl Client {
     ///
     /// # Arguments
     /// * `tag_id` - ID of the tag containing the blob
-    /// * `name` - Blob name
+    /// * `name` - Blob name (must not be empty)
     ///
     /// # Returns
     /// * `Ok(())` on success
+    /// * `Err(CteError::InvalidParameter)` if name is empty
     /// * `Err(CteError::RuntimeError)` on failure
     pub async fn del_blob(&self, tag_id: CteTagId, name: String) -> CteResult<()> {
+        // Validate inputs
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Blob name cannot be empty".to_string(),
+            });
+        }
+
         tokio::task::spawn_blocking(move || {
-            let client = ffi::client_new();
+            let client = SendableClient(ffi::client_new());
             let rc = ffi::client_del_blob(
-                &client,
+                &client.0,
                 tag_id.major,
                 tag_id.minor,
                 &name,
@@ -192,13 +354,16 @@ impl Client {
             } else {
                 Err(CteError::RuntimeError {
                     code: rc as u32,
-                    message: format!("Failed to delete blob {}", name),
+                    message: format!(
+                        "Failed to delete blob '{}' in tag {}.{}: error code {}",
+                        name, tag_id.major, tag_id.minor, rc
+                    ),
                 })
             }
         })
         .await
         .map_err(|e| CteError::FfiError {
-            message: e.to_string(),
+            message: format!("Delete blob spawn_blocking error: {}", e),
         })?
     }
 }
@@ -206,131 +371,425 @@ impl Client {
 /// Async tag wrapper
 ///
 /// Provides async methods for tag/blob operations.
-/// Uses spawn_blocking to bridge C++ blocking calls.
+/// Uses `Arc<Mutex<SendableTag>>` for thread-safe access to the underlying C++ Tag.
+///
+/// All operations lock the mutex and perform the FFI call within `spawn_blocking`,
+/// ensuring thread-safe access to the underlying C++ object.
 pub struct Tag {
-    inner: cxx::UniquePtr<ffi::Tag>,
+    inner: Arc<std::sync::Mutex<SendableTag>>,
 }
 
 impl Tag {
     /// Create or get a tag by name
     ///
     /// # Arguments
-    /// * `name` - Tag name
+    /// * `name` - Tag name (must not be empty)
+    ///
+    /// # Returns
+    /// * `Ok(Tag)` on success
+    /// * `Err(CteError::FfiError)` on spawn_blocking failure
+    /// * `Err(CteError::InvalidParameter)` if name is empty
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn new(name: &str) -> CteResult<Self> {
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Tag name cannot be empty".to_string(),
+            });
+        }
+
         let name = name.to_string();
-        let inner = tokio::task::spawn_blocking(move || ffi::tag_new(&name))
+        let name_clone = name.clone();
+        let sendable_tag = tokio::task::spawn_blocking(move || {
+            SendableTag(ffi::tag_new(&name_clone))
+        })
             .await
             .map_err(|e| CteError::FfiError {
-                message: e.to_string(),
+                message: format!("Failed to create tag '{}': spawn_blocking error: {}", name, e),
             })?;
-        Ok(Self { inner })
+
+        Ok(Self {
+            inner: Arc::new(std::sync::Mutex::new(sendable_tag)),
+        })
     }
 
     /// Open an existing tag by ID
     ///
     /// # Arguments
     /// * `id` - Tag ID
+    ///
+    /// # Returns
+    /// * `Ok(Tag)` on success
+    /// * `Err(CteError::FfiError)` on spawn_blocking failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::{Tag, CteTagId};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let id = CteTagId { major: 1, minor: 2 };
+    ///     let tag = Tag::from_id(id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn from_id(id: CteTagId) -> CteResult<Self> {
-        let inner = tokio::task::spawn_blocking(move || {
-            ffi::tag_from_id(id.major, id.minor)
+        let (major, minor) = (id.major, id.minor);
+        let sendable_tag = tokio::task::spawn_blocking(move || {
+            SendableTag(ffi::tag_from_id(major, minor))
         })
-        .await
-        .map_err(|e| CteError::FfiError {
-            message: e.to_string(),
-        })?;
-        Ok(Self { inner })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!(
+                    "Failed to open tag {}.{}: spawn_blocking error: {}",
+                    major, minor, e
+                ),
+            })?;
+
+        Ok(Self {
+            inner: Arc::new(std::sync::Mutex::new(sendable_tag)),
+        })
+    }
+
+    /// Get the tag ID
+    ///
+    /// # Returns
+    /// The unique identifier for this tag.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     let id = tag.get_id().await?;
+    ///     println!("Tag ID: major={}, minor={}", id.major, id.minor);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_id(&self) -> CteResult<CteTagId> {
+        let inner = self.inner.clone();
+        
+        tokio::task::spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let major = ffi::tag_get_id_major(&guard.0);
+            let minor = ffi::tag_get_id_minor(&guard.0);
+            CteTagId { major, minor }
+        })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!("Get tag ID spawn_blocking error: {}", e),
+            })
     }
 
     /// Get the placement score of a blob
     ///
     /// # Arguments
-    /// * `name` - Blob name
+    /// * `name` - Blob name (must not be empty)
     ///
     /// # Returns
     /// Score value (0.0-1.0)
     ///
-    /// # Panics
-    /// This method is not yet implemented. Async Tag operations require
-    /// `Arc<Mutex<Tag>>` for thread-safe access to the underlying C++ object.
-    /// Use the sync API (`wrp_cte::sync::Tag`) instead.
-    pub async fn get_blob_score(&self, _name: &str) -> f32 {
-        panic!(
-            "get_blob_score is not implemented for async API. \
-             Async Tag operations require Arc<Mutex<Tag>> for thread-safe access \
-             to the underlying C++ object. Use the sync API (wrp_cte::sync::Tag) instead."
-        )
+    /// # Errors
+    /// * `CteError::InvalidParameter` if name is empty
+    /// * `CteError::FfiError` on spawn_blocking failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     let score = tag.get_blob_score("data.bin").await?;
+    ///     println!("Score: {}", score);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_blob_score(&self, name: &str) -> CteResult<f32> {
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Blob name cannot be empty".to_string(),
+            });
+        }
+
+        let inner = self.inner.clone();
+        let name = name.to_string();
+        
+        tokio::task::spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            ffi::tag_get_blob_score(&guard.0, &name)
+        })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!("Get blob score spawn_blocking error: {}", e),
+            })
     }
 
     /// Reorganize a blob (change placement score)
     ///
-    /// # Panics
-    /// This method is not yet implemented. Async Tag operations require
-    /// `Arc<Mutex<Tag>>` for thread-safe access to the underlying C++ object.
-    /// Use the sync API (`wrp_cte::sync::Tag`) instead.
-    pub async fn reorganize_blob(&self, _name: String, _score: f32) -> CteResult<()> {
-        Err(CteError::NotImplemented {
-            feature: "reorganize_blob".to_string(),
-            reason: "Async Tag operations require Arc<Mutex<Tag>> for thread-safe access \
-                     to the underlying C++ object. Use the sync API (wrp_cte::sync::Tag) instead."
-                .to_string(),
+    /// # Arguments
+    /// * `name` - Blob name (must not be empty)
+    /// * `score` - New placement score (0.0-1.0)
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(CteError::InvalidParameter)` if name is empty or score out of range
+    /// * `Err(CteError::RuntimeError)` on failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     tag.reorganize_blob("data.bin".to_string(), 0.5).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn reorganize_blob(&self, name: String, score: f32) -> CteResult<()> {
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Blob name cannot be empty".to_string(),
+            });
+        }
+        if score < 0.0 || score > 1.0 {
+            return Err(CteError::InvalidParameter {
+                message: format!("Score must be between 0.0 and 1.0, got {}", score),
+            });
+        }
+
+        let inner = self.inner.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let rc = ffi::tag_reorganize_blob(&guard.0, &name, score);
+            if rc == 0 {
+                Ok(())
+            } else {
+                let tag_id_major = ffi::tag_get_id_major(&guard.0);
+                let tag_id_minor = ffi::tag_get_id_minor(&guard.0);
+                Err(CteError::RuntimeError {
+                    code: rc as u32,
+                    message: format!(
+                        "Failed to reorganize blob '{}' in tag {}.{} with score {}: error code {}",
+                        name, tag_id_major, tag_id_minor, score, rc
+                    ),
+                })
+            }
         })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!("Reorganize blob spawn_blocking error: {}", e),
+            })?
     }
 
     /// Write data into a blob
     ///
-    /// # Panics
-    /// This method is not yet implemented. Async Tag operations require
-    /// `Arc<Mutex<Tag>>` for thread-safe access to the underlying C++ object.
-    /// Use the sync API (`wrp_cte::sync::Tag`) instead.
-    pub async fn put_blob(&self, _name: String, _data: Vec<u8>, _offset: u64, _score: f32) {
-        panic!(
-            "put_blob is not implemented for async API. \
-             Async Tag operations require Arc<Mutex<Tag>> for thread-safe access \
-             to the underlying C++ object. Use the sync API (wrp_cte::sync::Tag) instead."
-        )
+    /// # Arguments
+    /// * `name` - Blob name (must not be empty)
+    /// * `data` - Data buffer to write
+    /// * `offset` - Offset within the blob to write to
+    /// * `score` - Placement score (0.0-1.0)
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(CteError::InvalidParameter)` if name is empty or score out of range
+    /// * `Err(CteError::FfiError)` on spawn_blocking failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     tag.put_blob("data.bin".to_string(), b"hello".to_vec(), 0, 1.0).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn put_blob(&self, name: String, data: Vec<u8>, offset: u64, score: f32) -> CteResult<()> {
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Blob name cannot be empty".to_string(),
+            });
+        }
+        if score < 0.0 || score > 1.0 {
+            return Err(CteError::InvalidParameter {
+                message: format!("Score must be between 0.0 and 1.0, got {}", score),
+            });
+        }
+
+        let inner = self.inner.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            ffi::tag_put_blob(&guard.0, &name, &data, offset, score);
+            Ok(())
+        })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!("Put blob spawn_blocking error: {}", e),
+            })?
     }
 
     /// Read data from a blob
     ///
-    /// # Panics
-    /// This method is not yet implemented. Async Tag operations require
-    /// `Arc<Mutex<Tag>>` for thread-safe access to the underlying C++ object.
-    /// Use the sync API (`wrp_cte::sync::Tag`) instead.
-    pub async fn get_blob(&self, _name: String, _size: u64, _offset: u64) -> Vec<u8> {
-        panic!(
-            "get_blob is not implemented for async API. \
-             Async Tag operations require Arc<Mutex<Tag>> for thread-safe access \
-             to the underlying C++ object. Use the sync API (wrp_cte::sync::Tag) instead."
-        )
+    /// # Arguments
+    /// * `name` - Blob name (must not be empty)
+    /// * `size` - Number of bytes to read
+    /// * `offset` - Offset within the blob to read from
+    ///
+    /// # Returns
+    /// The data read from the blob
+    ///
+    /// # Errors
+    /// * `CteError::InvalidParameter` if name is empty
+    /// * `CteError::FfiError` on spawn_blocking failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     let data = tag.get_blob("data.bin".to_string(), 5, 0).await?;
+    ///     assert_eq!(data, b"hello");
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_blob(&self, name: String, size: u64, offset: u64) -> CteResult<Vec<u8>> {
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Blob name cannot be empty".to_string(),
+            });
+        }
+
+        let inner = self.inner.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let mut out = Vec::new();
+            ffi::tag_get_blob(&guard.0, &name, size, offset, &mut out);
+            out
+        })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!("Get blob spawn_blocking error: {}", e),
+            })
     }
 
     /// Get the size of a blob
     ///
-    /// # Panics
-    /// This method is not yet implemented. Async Tag operations require
-    /// `Arc<Mutex<Tag>>` for thread-safe access to the underlying C++ object.
-    /// Use the sync API (`wrp_cte::sync::Tag`) instead.
-    pub async fn get_blob_size(&self, _name: &str) -> u64 {
-        panic!(
-            "get_blob_size is not implemented for async API. \
-             Async Tag operations require Arc<Mutex<Tag>> for thread-safe access \
-             to the underlying C++ object. Use the sync API (wrp_cte::sync::Tag) instead."
-        )
+    /// # Arguments
+    /// * `name` - Blob name (must not be empty)
+    ///
+    /// # Returns
+    /// Size of the blob in bytes
+    ///
+    /// # Errors
+    /// * `CteError::InvalidParameter` if name is empty
+    /// * `CteError::FfiError` on spawn_blocking failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     let size = tag.get_blob_size("data.bin").await?;
+    ///     println!("Blob size: {} bytes", size);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_blob_size(&self, name: &str) -> CteResult<u64> {
+        if name.is_empty() {
+            return Err(CteError::InvalidParameter {
+                message: "Blob name cannot be empty".to_string(),
+            });
+        }
+
+        let inner = self.inner.clone();
+        let name = name.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            ffi::tag_get_blob_size(&guard.0, &name)
+        })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!("Get blob size spawn_blocking error: {}", e),
+            })
     }
 
     /// List all blobs in this tag
     ///
-    /// # Panics
-    /// This method is not yet implemented. Async Tag operations require
-    /// `Arc<Mutex<Tag>>` for thread-safe access to the underlying C++ object.
-    /// Use the sync API (`wrp_cte::sync::Tag`) instead.
-    pub async fn get_contained_blobs(&self) -> Vec<String> {
-        panic!(
-            "get_contained_blobs is not implemented for async API. \
-             Async Tag operations require Arc<Mutex<Tag>> for thread-safe access \
-             to the underlying C++ object. Use the sync API (wrp_cte::sync::Tag) instead."
-        )
+    /// # Returns
+    /// Vector of blob names
+    ///
+    /// # Errors
+    /// * `CteError::FfiError` on spawn_blocking failure
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag = Tag::new("my_dataset").await?;
+    ///     let blobs = tag.get_contained_blobs().await?;
+    ///     for blob in blobs {
+    ///         println!("Blob: {}", blob);
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_contained_blobs(&self) -> CteResult<Vec<String>> {
+        let inner = self.inner.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let mut out = Vec::new();
+            ffi::tag_get_contained_blobs(&guard.0, &mut out);
+            out
+        })
+            .await
+            .map_err(|e| CteError::FfiError {
+                message: format!("Get contained blobs spawn_blocking error: {}", e),
+            })
     }
+}
+
+/// Shutdown the CTE runtime
+///
+/// This function should be called before program exit to properly
+/// clean up CTE resources.
+///
+/// # Note
+/// This uses the sync API's shutdown function internally, which must
+/// be called from a blocking context.
+pub async fn shutdown() -> CteResult<()> {
+    tokio::task::spawn_blocking(move || {
+        crate::sync::shutdown();
+        Ok(())
+    })
+        .await
+        .map_err(|e| CteError::FfiError {
+            message: format!("Shutdown spawn_blocking error: {}", e),
+        })?
 }
 
 #[cfg(test)]
@@ -344,5 +803,54 @@ mod tests {
 
         assert_eq!(local.net_timeout(), 0.0);
         assert_eq!(dynamic.net_timeout(), 30.0);
+    }
+
+    #[test]
+    fn test_tag_validation() {
+        // This test verifies input validation logic without actual FFI calls
+        // Since Tag::new requires FFI, we test validation through async methods
+
+        // Test empty name validation
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            // Validation happens before FFI call, so this should fail fast
+            let tag_ptr = ffi::tag_new("test_tag");
+            let tag = Tag {
+                inner: Arc::new(std::sync::Mutex::new(SendableTag(tag_ptr))),
+            };
+            
+            // Test get_blob_score with empty name (should fail validation)
+            tag.get_blob_score("").await
+        });
+
+        assert!(result.is_err());
+        match result {
+            Err(CteError::InvalidParameter { message }) => {
+                assert!(message.contains("cannot be empty"));
+            }
+            _ => panic!("Expected InvalidParameter error"),
+        }
+    }
+
+    #[test]
+    fn test_score_validation() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let tag_ptr = ffi::tag_new("test_tag");
+            let tag = Tag {
+                inner: Arc::new(std::sync::Mutex::new(SendableTag(tag_ptr))),
+            };
+            
+            // Test with invalid score (< 0)
+            tag.reorganize_blob("test".to_string(), -1.0).await
+        });
+
+        assert!(result.is_err());
+        match result {
+            Err(CteError::InvalidParameter { message }) => {
+                assert!(message.contains("Score must be between"));
+            }
+            _ => panic!("Expected InvalidParameter error"),
+        }
     }
 }

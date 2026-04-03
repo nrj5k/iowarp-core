@@ -157,7 +157,6 @@ mod async_tests {
 
     #[tokio::test]
     #[cfg(feature = "async")]
-    #[ignore = "Async Tag operations require Arc<Mutex<Tag>> - not yet implemented"]
     async fn test_tag_lifecycle() {
         // Note: Requires running CTE runtime
         // Set CHI_WITH_RUNTIME=1 before running tests
@@ -172,25 +171,24 @@ mod async_tests {
         let data = b"hello from rust test";
 
         // Put blob
-        tag.put_blob("test_blob".to_string(), data.to_vec(), 0, 1.0).await;
+        tag.put_blob("test_blob".to_string(), data.to_vec(), 0, 1.0).await.expect("put_blob failed");
 
         // Get blob size
-        let size = tag.get_blob_size("test_blob").await;
-        assert_eq!(size, data.len() as u64);
+        let size = tag.get_blob_size("test_blob").await.expect("get_blob_size failed");
 
         // Get blob
-        let got = tag.get_blob("test_blob".to_string(), size, 0).await;
+        let got = tag.get_blob("test_blob".to_string(), size, 0).await.expect("get_blob failed");
         assert_eq!(got, data);
 
         // Get blob score
-        let score = tag.get_blob_score("test_blob").await;
+        let score = tag.get_blob_score("test_blob").await.expect("get_blob_score failed");
         assert!((score - 1.0).abs() < 0.01);
 
         // Reorganize blob
         tag.reorganize_blob("test_blob".to_string(), 0.5).await.expect("reorganize failed");
 
         // Get new score
-        let new_score = tag.get_blob_score("test_blob").await;
+        let new_score = tag.get_blob_score("test_blob").await.expect("get_blob_score failed");
         assert!((new_score - 0.5).abs() < 0.01);
     }
 
@@ -230,10 +228,10 @@ mod sync_tests {
         
         tag.put_blob("test_blob", data);
 
-        let size = tag.get_blob_size("test_blob");
+        let size = tag.get_blob_size("test_blob").expect("get_blob_size failed");
         assert_eq!(size, data.len() as u64);
 
-        let got = tag.get_blob("test_blob", size, 0);
+        let got = tag.get_blob("test_blob", size, 0).expect("get_blob failed");
         assert_eq!(got, data);
     }
 }

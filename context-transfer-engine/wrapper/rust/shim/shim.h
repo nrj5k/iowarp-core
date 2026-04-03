@@ -40,42 +40,16 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <vector>
 
 #include "rust/cxx.h"
 
 namespace cte_ffi {
 
-// Forward declarations
-struct Client;
-struct Tag;
-
 // Thread-safe initialization
 extern std::once_flag g_init_flag;
 extern bool g_init_done;
 
-// Shared structs (MUST match Rust layout exactly)
-// CteTagId matches chi::UniqueId (8 bytes: major + minor)
-struct CteTagId {
-  uint32_t major;
-  uint32_t minor;
-};
-
-struct SteadyTime {
-  int64_t nanos;
-};
-
-struct CteTelemetry {
-  uint32_t op;
-  uint64_t off;
-  uint64_t size;
-  CteTagId tag_id;
-  SteadyTime mod_time;
-  SteadyTime read_time;
-  uint64_t logical_time;
-};
-
-// Opaque wrapper types
+// Opaque wrapper types - shared across FFI boundary
 struct Client {
   mutable wrp_cte::core::Client inner;
 };
@@ -84,37 +58,49 @@ struct Tag {
   mutable wrp_cte::core::Tag inner;
 
   explicit Tag(const std::string& name) : inner(name) {}
-  explicit Tag(const wrp_cte::core::TagId& id) : inner(id) {}
+  explicit Tag(const chi::UniqueId& id) : inner(id) {}
 };
 
-// Initialization (returns error code: 0 = success, non-zero = failure)
+// Initialization
 int32_t cte_init(rust::Str config_path);
 
 // Client operations
 std::unique_ptr<Client> client_new();
-std::vector<CteTelemetry> client_poll_telemetry(const Client& client,
-                                                uint64_t min_time);
+
+// Tag factory functions
+std::unique_ptr<Tag> tag_new(rust::Str name);
+std::unique_ptr<Tag> tag_from_id(uint32_t major, uint32_t minor);
+
+// Tag blob operations - simple scalar returns only
+float tag_get_blob_score(const Tag& tag, rust::Str name);
+int32_t tag_reorganize_blob(const Tag& tag, rust::Str name, float score);
+uint64_t tag_get_blob_size(const Tag& tag, rust::Str name);
+
+// Operations with buffers - avoid shared struct returns
 int32_t client_reorganize_blob(const Client& client, uint32_t major,
                                uint32_t minor, rust::Str name, float score);
+
 int32_t client_del_blob(const Client& client, uint32_t major, uint32_t minor,
                         rust::Str name);
 
-// Pool query factory functions
-std::unique_ptr<chi::PoolQuery> pool_query_broadcast(float timeout);
-std::unique_ptr<chi::PoolQuery> pool_query_dynamic(float timeout);
-std::unique_ptr<chi::PoolQuery> pool_query_local();
-
-// Tag operations
-std::unique_ptr<Tag> tag_new(rust::Str name);
-std::unique_ptr<Tag> tag_from_id(uint32_t major, uint32_t minor);
-float tag_get_blob_score(const Tag& tag, rust::Str name);
-int32_t tag_reorganize_blob(const Tag& tag, rust::Str name, float score);
 void tag_put_blob(const Tag& tag, rust::Str name,
                   rust::Slice<const uint8_t> data, uint64_t offset,
                   float score);
-std::vector<uint8_t> tag_get_blob(const Tag& tag, rust::Str name, uint64_t size,
-                                  uint64_t offset);
-uint64_t tag_get_blob_size(const Tag& tag, rust::Str name);
-std::vector<std::string> tag_get_contained_blobs(const Tag& tag);
+
+void tag_get_blob(const Tag& tag, rust::Str name, uint64_t size,
+                  uint64_t offset, rust::Vec<uint8_t>& out);
+
+void tag_get_contained_blobs(const Tag& tag, rust::Vec<rust::String>& out);
+
+// Telemetry - returns flat array: each entry is (op:u32, off:u64, size:u64,
+// tag_major:u32, tag_minor:u32, mod_time_nanos:i64, read_time_nanos:i64,
+// logical_time:u64) Total 52 bytes per entry. Caller interprets the byte
+// buffer.
+void client_poll_telemetry_raw(const Client& client, uint64_t min_time,
+                               rust::Vec<uint8_t>& out);
+
+// Tag ID helpers (exposed for Rust-side conversion)
+uint32_t tag_get_id_major(const Tag& tag);
+uint32_t tag_get_id_minor(const Tag& tag);
 
 }  // namespace cte_ffi
