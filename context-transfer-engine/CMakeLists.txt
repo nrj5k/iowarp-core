@@ -66,6 +66,19 @@ endif()
 # Add wrapper components (includes Python bindings if enabled)
 add_subdirectory(wrapper)
 
+# Add benchmarks if enabled
+# Benchmarks are controlled by WRP_CORE_ENABLE_BENCHMARKS
+if(WRP_CORE_ENABLE_BENCHMARKS)
+  add_subdirectory(benchmark)
+  message(STATUS "CTE benchmarks enabled - added benchmark subdirectory")
+endif()
+
+message(STATUS "CTE Core and Bdev ChiMods configured for compilation")
+
+if(WRP_CORE_ENABLE_JARVIS)
+    jarvis_repo_add(${WRP_CTE_ROOT}/test/jarvis_iowarp)
+endif()
+
 #------------------------------------------------------------------------------
 # Rust Bindings Configuration
 #------------------------------------------------------------------------------
@@ -103,6 +116,8 @@ if(WRP_CORE_ENABLE_RUST)
         endif()
 
         # Import Rust crate
+        # NOTE: This must come AFTER all add_subdirectory calls for C++ targets
+        # to ensure all libraries (wrp_cte_core_client, etc.) are fully defined
         corrosion_import_crate(
             MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust/Cargo.toml
             FEATURES async
@@ -119,23 +134,6 @@ if(WRP_CORE_ENABLE_RUST)
             "IOWARP_ZMQ_LIB_DIRS=${ZMQ_LIB_DIRS}"
         )
         
-        # Dependency: CTE client must be built first
-        # Note: Corrosion creates targets based on [lib] name (wrp_cte), not package name (wrp-cte-rs)
-        add_dependencies(wrp_cte wrp_cte_core_client)
-        
         message(STATUS "CTE Rust bindings configured: wrp_cte (from package wrp-cte-rs)")
     endif()
-endif()
-
-# Add benchmarks if enabled
-# Benchmarks are controlled by WRP_CORE_ENABLE_BENCHMARKS
-if(WRP_CORE_ENABLE_BENCHMARKS)
-  add_subdirectory(benchmark)
-  message(STATUS "CTE benchmarks enabled - added benchmark subdirectory")
-endif()
-
-message(STATUS "CTE Core and Bdev ChiMods configured for compilation")
-
-if(WRP_CORE_ENABLE_JARVIS)
-    jarvis_repo_add(${WRP_CTE_ROOT}/test/jarvis_iowarp)
 endif()
