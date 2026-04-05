@@ -115,17 +115,13 @@ if(WRP_CORE_ENABLE_RUST)
             message(FATAL_ERROR "ZeroMQ not found but required for Rust bindings. Install with: sudo apt-get install libzmq3-dev")
         endif()
 
-        # Import Rust crate
-        # NOTE: This must come AFTER all add_subdirectory calls for C++ targets
-        # to ensure all libraries (wrp_cte_core_client, etc.) are fully defined
+        # Import Rust crate using Corrosion
         corrosion_import_crate(
             MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust/Cargo.toml
             FEATURES async
         )
         
-        # Set environment variables for build.rs AFTER target is created
-        # Format: ENV_VAR=value (passed to cargo as environment variables)
-        # Include all ChiMod directories to avoid missing headers
+        # Set environment variables for build.rs to find C++ headers and libraries
         corrosion_set_env_vars(wrp_cte 
             "IOWARP_INCLUDE_DIR=${HSHM_ROOT}/include"
             "IOWARP_EXTRA_INCLUDES=${CHIMAERA_ROOT}/include:${CTE_ROOT}/core/include:${CHIMODS_ROOT}/admin/include:${CHIMODS_ROOT}/bdev/include:${CEREAL_INCLUDE_DIR}"
@@ -133,6 +129,27 @@ if(WRP_CORE_ENABLE_RUST)
             "IOWARP_ZMQ_LIBS=${ZMQ_LIBS}"
             "IOWARP_ZMQ_LIB_DIRS=${ZMQ_LIB_DIRS}"
         )
+        
+        # Ensure C++ client library is built before Rust library
+        # Corrosion creates internal targets like _cargo-build_<crate>
+        # We need to make the cargo build depend on the C++ library
+        if(TARGET _cargo-build_wrp_cte)
+            add_dependencies(_cargo-build_wrp_cte wrp_cte_core_client)
+            message(STATUS "Added dependency: _cargo-build_wrp_cte -> wrp_cte_core_client")
+        endif()
+        if(TARGET _cargo-build_wrp-cte-rs)
+            add_dependencies(_cargo-build_wrp-cte-rs wrp_cte_core_client)
+            message(STATUS "Added dependency: _cargo-build_wrp-cte-rs -> wrp_cte_core_client")
+        endif()
+        # Also try the standard target names
+        if(TARGET wrp_cte)
+            add_dependencies(wrp_cte wrp_cte_core_client)
+            message(STATUS "Added dependency: wrp_cte -> wrp_cte_core_client")
+        endif()
+        if(TARGET "wrp-cte-rs")
+            add_dependencies("wrp-cte-rs" wrp_cte_core_client)
+            message(STATUS "Added dependency: wrp-cte-rs -> wrp_cte_core_client")
+        endif()
         
         message(STATUS "CTE Rust bindings configured: wrp_cte (from package wrp-cte-rs)")
     endif()
