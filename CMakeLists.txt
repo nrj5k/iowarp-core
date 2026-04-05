@@ -43,17 +43,24 @@ option(WRP_CORE_STATIC_DEPS "Link external dependencies statically (for self-con
 option(WRP_CORE_ENABLE_RUST "Enable Rust bindings (requires Corrosion)" OFF)
 if(WRP_CORE_ENABLE_RUST)
     message(STATUS "Rust bindings enabled - configuring Corrosion")
-    
+
+    # Ensure cmake module path is set before including AutoConfigureRust
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+    # Auto-configure Rust paths BEFORE FetchContent_MakeAvailable(Corrosion)
+    # because Corrosion's FindRust.cmake runs immediately
+    include(AutoConfigureRust)
+
     # Fetch Corrosion
     include(FetchContent)
     FetchContent_Declare(
         Corrosion
         GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-        GIT_TAG v0.5.0
+        GIT_TAG v0.5.1
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(Corrosion)
-    
+
     message(STATUS "Corrosion configured - Rust bindings available")
 endif()
 
