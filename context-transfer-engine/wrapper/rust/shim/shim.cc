@@ -63,7 +63,18 @@ int32_t cte_init(rust::Str config_path) {
 }
 
 // Client factory
-std::unique_ptr<Client> client_new() { return std::make_unique<Client>(); }
+std::unique_ptr<Client> client_new() {
+  // Get the global CTE client that was initialized by WRP_CTE_CLIENT_INIT
+  auto* global_client = wrp_cte::core::g_cte_client;
+  if (global_client == nullptr) {
+    // Fallback: create a client (will fail later when used)
+    return std::make_unique<Client>();
+  }
+  // Create a client with the proper pool_id from the global client
+  auto client = std::make_unique<Client>();
+  client->inner.pool_id_ = global_client->pool_id_;
+  return client;
+}
 
 // Tag factory functions
 std::unique_ptr<Tag> tag_new(rust::Str name) {

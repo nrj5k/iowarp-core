@@ -37,6 +37,7 @@
 //! logic without requiring a running CTE runtime.
 
 use super::*;
+use crate::error::ToCteResult;
 
 // ============================================================================
 // types.rs Tests

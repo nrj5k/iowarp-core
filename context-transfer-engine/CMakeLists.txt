@@ -152,5 +152,80 @@ if(WRP_CORE_ENABLE_RUST)
         endif()
         
         message(STATUS "CTE Rust bindings configured: wrp_cte (from package wrp-cte-rs)")
+        
+        #------------------------------------------------------------------------------
+        # Rust Example/Test Targets
+        #------------------------------------------------------------------------------
+        # These targets allow running Rust examples and tests via CMake with
+        # proper environment setup
+        
+        # Get Cereal include directory for build.rs
+        get_target_property(CEREAL_INCLUDE_DIR cereal::cereal INTERFACE_INCLUDE_DIRECTORIES)
+        if(NOT CEREAL_INCLUDE_DIR)
+            get_filename_component(CEREAL_ROOT "${cereal_DIR}/../../.." ABSOLUTE)
+            set(CEREAL_INCLUDE_DIR "${CEREAL_ROOT}/include")
+        endif()
+        
+        # Export variables for Rust build scripts
+        set(RUST_ENV_VARS
+            "IOWARP_INCLUDE_DIR=${HSHM_ROOT}/include"
+            "IOWARP_EXTRA_INCLUDES=${CHIMAERA_ROOT}/include:${CTE_ROOT}/core/include:${CHIMODS_ROOT}/admin/include:${CHIMODS_ROOT}/bdev/include:${CEREAL_INCLUDE_DIR}"
+            "IOWARP_LIB_DIR=${CMAKE_BINARY_DIR}/bin"
+            "IOWARP_ZMQ_LIBS=${ZMQ_LIBS}"
+            "IOWARP_ZMQ_LIB_DIRS=${ZMQ_LIB_DIRS}"
+            "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/bin:$ENV{LD_LIBRARY_PATH}"
+            "CHI_WITH_RUNTIME=1"
+        )
+        
+        # Add custom target to run Rust telemetry example
+        add_custom_target(run_rust_telemetry
+            COMMAND ${CMAKE_COMMAND} -E env ${RUST_ENV_VARS}
+                    ${Rust_CARGO} run --example telemetry_capture
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust
+            COMMENT "Running Rust telemetry capture example..."
+            DEPENDS wrp_cte
+        )
+        
+        # Add custom target to run Rust unit tests
+        add_custom_target(run_rust_tests
+            COMMAND ${CMAKE_COMMAND} -E env ${RUST_ENV_VARS}
+                    ${Rust_CARGO} test --lib
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust
+            COMMENT "Running Rust unit tests..."
+            DEPENDS wrp_cte
+        )
+        
+        # Add custom target to run Rust integration tests
+        add_custom_target(run_rust_integration_tests
+            COMMAND ${CMAKE_COMMAND} -E env ${RUST_ENV_VARS}
+                    ${Rust_CARGO} test -- --include-ignored
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust
+            COMMENT "Running Rust integration tests..."
+            DEPENDS wrp_cte
+        )
+        
+        message(STATUS "  Added CMake targets:")
+        message(STATUS "    - run_rust_telemetry: Run telemetry capture example")
+        message(STATUS "    - run_rust_tests: Run Rust unit tests")
+        message(STATUS "    - run_rust_integration_tests: Run Rust integration tests")
+        
+        #------------------------------------------------------------------------------
+        # Aneris Telemetry Script
+        #------------------------------------------------------------------------------
+        # Generate Aneris_telemetry script with all paths properly configured
+        configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust/Aneris_telemetry.in"
+            "${CMAKE_BINARY_DIR}/bin/Aneris_telemetry"
+            @ONLY
+        )
+        
+        # Make it executable
+        file(CHMOD "${CMAKE_BINARY_DIR}/bin/Aneris_telemetry"
+            PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                        GROUP_READ GROUP_EXECUTE
+                        WORLD_READ WORLD_EXECUTE
+        )
+        
+        message(STATUS "Generated Aneris_telemetry script: ${CMAKE_BINARY_DIR}/bin/Aneris_telemetry")
     endif()
 endif()
