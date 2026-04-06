@@ -99,8 +99,9 @@ pub mod sync;
 
 // Re-export core types
 pub use error::{CteError, CteResult};
+pub use ffi::CteTelemetry;
 pub use types::{
-    BdevType, ChimaeraMode, CteOp, CteTagId, CteTelemetry, PoolQuery, SteadyTime,
+    BdevType, ChimaeraMode, CteOp, CteTagId, PoolQuery, SteadyTime,
 };
 
 // Re-export API based on features

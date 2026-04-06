@@ -29,3 +29,11 @@ tokio = { version = "1.50", features = ["rt-multi-thread", "macros", "signal", "
 [[example]]
 name = "blob_monitor"
 path = "examples/blob_monitor.rs"
+
+[[bin]]
+name = "aneris-profiler"
+path = "src/bin/aneris/main.rs"
+
+[[bin]]
+name = "aneris-rescorer"
+path = "src/bin/aneris-rescorer/main.rs"

@@ -115,6 +115,12 @@ if(WRP_CORE_ENABLE_RUST)
             message(FATAL_ERROR "ZeroMQ not found but required for Rust bindings. Install with: sudo apt-get install libzmq3-dev")
         endif()
 
+        # Include rust subdirectory to get ANERIS_RUSTFLAGS variable
+        include(${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust/CMakeLists.txt)
+
+        # Set RUSTFLAGS for corrosion
+        set(ENV{RUSTFLAGS} ${ANERIS_RUSTFLAGS})
+
         # Import Rust crate using Corrosion
         corrosion_import_crate(
             MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/wrapper/rust/Cargo.toml
@@ -149,6 +155,18 @@ if(WRP_CORE_ENABLE_RUST)
         if(TARGET "wrp-cte-rs")
             add_dependencies("wrp-cte-rs" wrp_cte_core_client)
             message(STATUS "Added dependency: wrp-cte-rs -> wrp_cte_core_client")
+        endif()
+        
+        # Serialize Rust builds to prevent Cargo target directory conflicts
+        # All binaries share the same Cargo.toml workspace, so they must build sequentially
+        if(TARGET _cargo-build_wrp_cte AND TARGET _cargo-build_aneris-profiler)
+            add_dependencies(_cargo-build_aneris-profiler _cargo-build_wrp_cte)
+            message(STATUS "Rust build serialization: aneris-profiler -> wrp_cte")
+        endif()
+
+        if(TARGET _cargo-build_aneris-rescorer AND TARGET _cargo-build_aneris-profiler)
+            add_dependencies(_cargo-build_aneris-rescorer _cargo-build_aneris-profiler)
+            message(STATUS "Rust build serialization: aneris-rescorer -> aneris-profiler")
         endif()
         
         message(STATUS "CTE Rust bindings configured: wrp_cte (from package wrp-cte-rs)")
