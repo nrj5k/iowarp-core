@@ -69,8 +69,8 @@
 //!    thread; the C++ implementation handles internal synchronization.
 
 /// Telemetry entry size in bytes: op(4) + off(8) + size(8) + tag_major(4) + tag_minor(4) +
-/// mod_time_nanos(8) + read_time_nanos(8) + logical_time(8) = 52 bytes
-pub const TELEMETRY_ENTRY_SIZE: usize = 52;
+/// blob_hash(8) + mod_time_nanos(8) + read_time_nanos(8) + logical_time(8) = 60 bytes
+pub const TELEMETRY_ENTRY_SIZE: usize = 60;
 
 /// Offsets for parsing telemetry entries
 mod offsets {
@@ -79,9 +79,10 @@ mod offsets {
     pub const SIZE: usize = 12;
     pub const TAG_MAJOR: usize = 20;
     pub const TAG_MINOR: usize = 24;
-    pub const MOD_TIME: usize = 28;
-    pub const READ_TIME: usize = 36;
-    pub const LOGICAL_TIME: usize = 44;
+    pub const BLOB_HASH: usize = 28;
+    pub const MOD_TIME: usize = 36;
+    pub const READ_TIME: usize = 44;
+    pub const LOGICAL_TIME: usize = 52;
 }
 
 /// Telemetry operation type
@@ -93,6 +94,7 @@ pub enum CteOp {
     GetOrCreateTag = 3,
     DelTag = 4,
     GetTagSize = 5,
+    ReorganizeBlob = 6,
 }
 
 impl From<u32> for CteOp {
@@ -104,6 +106,7 @@ impl From<u32> for CteOp {
             3 => CteOp::GetOrCreateTag,
             4 => CteOp::DelTag,
             5 => CteOp::GetTagSize,
+            6 => CteOp::ReorganizeBlob,
             _ => CteOp::PutBlob,
         }
     }
@@ -129,6 +132,7 @@ pub struct CteTelemetry {
     pub off: u64,
     pub size: u64,
     pub tag_id: CteTagId,
+    pub blob_hash: u64,
     pub mod_time: SteadyTime,
     pub read_time: SteadyTime,
     pub logical_time: u64,
@@ -191,6 +195,17 @@ pub fn parse_telemetry(data: &[u8]) -> Vec<CteTelemetry> {
             data[offset + offsets::TAG_MINOR + 3],
         ]);
 
+        let blob_hash = u64::from_le_bytes([
+            data[offset + offsets::BLOB_HASH],
+            data[offset + offsets::BLOB_HASH + 1],
+            data[offset + offsets::BLOB_HASH + 2],
+            data[offset + offsets::BLOB_HASH + 3],
+            data[offset + offsets::BLOB_HASH + 4],
+            data[offset + offsets::BLOB_HASH + 5],
+            data[offset + offsets::BLOB_HASH + 6],
+            data[offset + offsets::BLOB_HASH + 7],
+        ]);
+
         let mod_time = i64::from_le_bytes([
             data[offset + offsets::MOD_TIME],
             data[offset + offsets::MOD_TIME + 1],
@@ -232,6 +247,7 @@ pub fn parse_telemetry(data: &[u8]) -> Vec<CteTelemetry> {
                 major: tag_major,
                 minor: tag_minor,
             },
+            blob_hash,
             mod_time: SteadyTime { nanos: mod_time },
             read_time: SteadyTime { nanos: read_time },
             logical_time,
@@ -241,6 +257,28 @@ pub fn parse_telemetry(data: &[u8]) -> Vec<CteTelemetry> {
     }
 
     entries
+}
+
+/// Block placement information from GetBlobInfo
+#[derive(Debug, Clone)]
+pub struct BlobBlockInfo {
+    /// Pool ID of the storage tier (bdev) storing this block
+    pub pool_id: u64,
+    /// Size of this block in bytes
+    pub block_size: u64,
+    /// Offset within the storage tier where block is stored
+    pub block_offset: u64,
+}
+
+/// Complete blob metadata from GetBlobInfo
+#[derive(Debug, Clone)]
+pub struct BlobInfo {
+    /// Blob placement score (0.0-1.0, higher = faster tier)
+    pub score: f32,
+    /// Total blob size in bytes
+    pub total_size: u64,
+    /// Block placement information
+    pub blocks: Vec<BlobBlockInfo>,
 }
 
 /// CXX bridge module - defines FFI boundary
@@ -389,6 +427,19 @@ pub mod ffi {
         // SAFETY: Same guarantees as client_reorganize_blob.
         fn client_del_blob(client: &Client, major: u32, minor: u32, name: &str) -> i32;
 
+        // Get blob info (comprehensive metadata with block placement)
+        //
+        // SAFETY: The output vector is properly initialized by Rust before being
+        // passed to C++. C++ appends bytes using resize/append, ensuring correct
+        // capacity and size management.
+        fn client_get_blob_info_raw(
+            client: &Client,
+            major: u32,
+            minor: u32,
+            name: &str,
+            out: &mut Vec<u8>,
+        );
+
         // Tag factory functions
         //
         // SAFETY: These return valid UniquePtr<Tag> that can be safely passed to
@@ -453,6 +504,90 @@ impl Client {
     /// Delete blob
     pub fn del_blob(&self, tag_id: &CteTagId, name: &str) -> i32 {
         ffi::client_del_blob(&self.inner, tag_id.major, tag_id.minor, name)
+    }
+
+    /// Get comprehensive blob information with block placement
+    ///
+    /// PERFORMANCE: Pre-allocates buffer, single FFI call
+    pub fn get_blob_info(&self, tag_id: &CteTagId, name: &str) -> Result<BlobInfo, i32> {
+        let mut data = Vec::with_capacity(256); // Most blobs have few blocks
+        ffi::client_get_blob_info_raw(&self.inner, tag_id.major, tag_id.minor, name, &mut data);
+
+        // Parse blob info from flat buffer
+        // Format: score(4) + total_size(8) + blocks_count(4) + blocks[...](24 each)
+        if data.len() < 16 {
+            return Err(-1);
+        }
+
+        // Parse score (f32 at offset 0)
+        let score = f32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+
+        // Parse total_size (u64 at offset 4)
+        let total_size = u64::from_le_bytes([
+            data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
+        ]);
+
+        // Parse blocks_count (u32 at offset 12)
+        let blocks_count = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+
+        // Validate buffer size
+        let expected_size = 16 + blocks_count * 24;
+        if data.len() < expected_size {
+            return Err(-1);
+        }
+
+        // Parse blocks
+        let mut blocks = Vec::with_capacity(blocks_count);
+        let mut offset = 16;
+        for _ in 0..blocks_count {
+            let pool_id = u64::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+                data[offset + 4],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+            ]);
+            offset += 8;
+
+            let block_size = u64::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+                data[offset + 4],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+            ]);
+            offset += 8;
+
+            let block_offset = u64::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+                data[offset + 4],
+                data[offset + 5],
+                data[offset + 6],
+                data[offset + 7],
+            ]);
+            offset += 8;
+
+            blocks.push(BlobBlockInfo {
+                pool_id,
+                block_size,
+                block_offset,
+            });
+        }
+
+        Ok(BlobInfo {
+            score,
+            total_size,
+            blocks,
+        })
     }
 }
 
@@ -537,15 +672,16 @@ mod tests {
         // Create a sample telemetry buffer
         let mut data = vec![0u8; TELEMETRY_ENTRY_SIZE * 2];
 
-        // Entry 1: op=1, off=100, size=200, tag_major=1, tag_minor=2, mod_time=1000, read_time=2000, logical=3000
+        // Entry 1: op=1, off=100, size=200, tag_major=1, tag_minor=2, blob_hash=12345, mod_time=1000, read_time=2000, logical=3000
         data[0..4].copy_from_slice(&1u32.to_le_bytes()); // op
         data[4..12].copy_from_slice(&100u64.to_le_bytes()); // off
         data[12..20].copy_from_slice(&200u64.to_le_bytes()); // size
         data[20..24].copy_from_slice(&1u32.to_le_bytes()); // tag_major
         data[24..28].copy_from_slice(&2u32.to_le_bytes()); // tag_minor
-        data[28..36].copy_from_slice(&1000i64.to_le_bytes()); // mod_time
-        data[36..44].copy_from_slice(&2000i64.to_le_bytes()); // read_time
-        data[44..52].copy_from_slice(&3000u64.to_le_bytes()); // logical_time
+        data[28..36].copy_from_slice(&12345u64.to_le_bytes()); // blob_hash
+        data[36..44].copy_from_slice(&1000i64.to_le_bytes()); // mod_time
+        data[44..52].copy_from_slice(&2000i64.to_le_bytes()); // read_time
+        data[52..60].copy_from_slice(&3000u64.to_le_bytes()); // logical_time
 
         // Entry 2
         let offset = TELEMETRY_ENTRY_SIZE;
@@ -557,6 +693,8 @@ mod tests {
         assert_eq!(entries[0].off, 100);
         assert_eq!(entries[0].size, 200);
         assert_eq!(entries[0].tag_id.major, 1);
+        assert_eq!(entries[0].tag_id.minor, 2);
+        assert_eq!(entries[0].blob_hash, 12345);
         assert_eq!(entries[1].op, CteOp::DelBlob);
     }
 }

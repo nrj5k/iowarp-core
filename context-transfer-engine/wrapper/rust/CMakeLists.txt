@@ -2,11 +2,18 @@
 # This file defines ANERIS_RUSTFLAGS variable for parent scope consumption
 
 # Define paths for aneris-profiler build (relative to wrapper/rust directory)
-get_filename_component(HSHM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../context-transport-primitives" ABSOLUTE)
-get_filename_component(CHIMAERA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../context-runtime" ABSOLUTE)
-get_filename_component(CTE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
-get_filename_component(CTE_CORE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-get_filename_component(CHIMODS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../context-runtime/modules" ABSOLUTE)
+# Use CMAKE_CURRENT_LIST_DIR which always points to this directory,
+# not CMAKE_CURRENT_SOURCE_DIR which can change based on who includes this file
+get_filename_component(HSHM_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../context-transport-primitives" ABSOLUTE)
+get_filename_component(CHIMAERA_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../context-runtime" ABSOLUTE)
+# CTE_ROOT should be the parent of wrapper/rust directory (context-transfer-engine)
+get_filename_component(CTE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+# CTE_CORE_ROOT should be context-transfer-engine/core
+get_filename_component(CTE_CORE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../core" ABSOLUTE)
+# CHIMODS_ROOT should be the parent of context-runtime (context-transfer-engine)
+# Note: CHIMODS_ROOT is the modules directory under context-runtime, so:
+# context-runtime/modules = context-runtime/.. + modules = context-transfer-engine + modules
+get_filename_component(CHIMODS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../context-runtime/modules" ABSOLUTE)
 
 # Get cereal include directory
 get_target_property(CEREAL_INCLUDE_DIR cereal::cereal INTERFACE_INCLUDE_DIRECTORIES)

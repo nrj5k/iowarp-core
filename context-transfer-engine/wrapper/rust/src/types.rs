@@ -45,6 +45,7 @@ pub enum CteOp {
     GetOrCreateTag = 3,
     DelTag = 4,
     GetTagSize = 5,
+    ReorganizeBlob = 6,
 }
 
 /// Block device types
@@ -166,6 +167,8 @@ pub struct CteTelemetry {
     pub size: u64,
     /// Tag ID associated with the operation
     pub tag_id: CteTagId,
+    /// 64-bit FNV-1a hash of (tag_id + blob_name) for blob identification
+    pub blob_hash: u64,
     /// Modification time (steady clock)
     pub mod_time: SteadyTime,
     /// Read time (steady clock)

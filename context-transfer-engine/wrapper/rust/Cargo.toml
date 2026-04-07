@@ -37,3 +37,6 @@ path = "src/bin/aneris/main.rs"
 [[bin]]
 name = "aneris-rescorer"
 path = "src/bin/aneris-rescorer/main.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(aneris_build_dir)'] }

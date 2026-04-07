@@ -37,6 +37,8 @@
 #include <wrp_cte/core/content_transfer_engine.h>
 #include <wrp_cte/core/core_client.h>
 
+#include <cstring>
+
 namespace cte_ffi {
 
 // Maximum blob size (16 GB) - must match Rust constant
@@ -180,15 +182,16 @@ void tag_get_contained_blobs(const Tag& tag, rust::Vec<rust::String>& out) {
 // Telemetry - encoded as raw bytes for Rust to decode
 // Each entry: op(u32) + off(u64) + size(u64) + tag_major(u32) + tag_minor(u32)
 // +
-//             mod_time_nanos(i64) + read_time_nanos(i64) + logical_time(u64)
-// = 4 + 8 + 8 + 4 + 4 + 8 + 8 + 8 = 52 bytes per entry
+//             blob_hash(u64) + mod_time_nanos(i64) + read_time_nanos(i64) +
+//             logical_time(u64) = 4 + 8 + 8 + 4 + 4 + 8 + 8 + 8 + 8 = 60 bytes
+// per entry
 void client_poll_telemetry_raw(const Client& client, uint64_t min_time,
                                rust::Vec<uint8_t>& out) {
   auto task = client.inner.AsyncPollTelemetryLog(min_time);
   task.Wait();
 
   out.clear();
-  out.reserve(task->entries_.size() * 52);
+  out.reserve(task->entries_.size() * 60);
 
   for (const auto& entry : task->entries_) {
     // op (u32)
@@ -224,6 +227,12 @@ void client_poll_telemetry_raw(const Client& client, uint64_t min_time,
     out.push_back(static_cast<uint8_t>((minor >> 16) & 0xFF));
     out.push_back(static_cast<uint8_t>((minor >> 24) & 0xFF));
 
+    // blob_hash (u64)
+    uint64_t hash = entry.blob_hash_;
+    for (int i = 0; i < 8; ++i) {
+      out.push_back(static_cast<uint8_t>((hash >> (i * 8)) & 0xFF));
+    }
+
     // mod_time_nanos (i64)
     int64_t mod_time = entry.mod_time_.time_since_epoch().count();
     for (int i = 0; i < 8; ++i) {
@@ -242,6 +251,73 @@ void client_poll_telemetry_raw(const Client& client, uint64_t min_time,
       out.push_back(static_cast<uint8_t>((logical >> (i * 8)) & 0xFF));
     }
   }
+}
+
+// GetBlobInfo FFI - performance-critical serialization
+// Format: score(f32) + total_size(u64) + blocks_count(u32) + blocks[...]
+// Each block: target_pool_id(u64) + block_size(u64) + block_offset(u64) = 24
+// bytes
+int32_t client_get_blob_info_raw(const Client& client, uint32_t major,
+                                 uint32_t minor, rust::Str name,
+                                 rust::Vec<uint8_t>& out) {
+  chi::UniqueId tag_id(major, minor);
+  std::string blob_name(name.data(), name.size());
+
+  auto task = client.inner.AsyncGetBlobInfo(tag_id, blob_name);
+  task.Wait();
+
+  if (task->GetReturnCode() != 0) {
+    return task->GetReturnCode();
+  }
+
+  // PERFORMANCE: Pre-allocate exact size to avoid reallocations
+  const size_t total_size = 16 + task->blocks_.size() * 24;
+  out.clear();
+  out.reserve(total_size);
+
+  // Serialize score (f32) - use memcpy for performance
+  uint32_t score_bits;
+  static_assert(sizeof(score_bits) == sizeof(task->score_), "Size mismatch");
+  std::memcpy(&score_bits, &task->score_, sizeof(float));
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(static_cast<uint8_t>((score_bits >> (i * 8)) & 0xFF));
+  }
+
+  // Serialize total_size (u64)
+  uint64_t total_size_val = task->total_size_;
+  for (int i = 0; i < 8; ++i) {
+    out.push_back(static_cast<uint8_t>((total_size_val >> (i * 8)) & 0xFF));
+  }
+
+  // Serialize blocks_count (u32)
+  uint32_t blocks_count = static_cast<uint32_t>(task->blocks_.size());
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(static_cast<uint8_t>((blocks_count >> (i * 8)) & 0xFF));
+  }
+
+  // Serialize each block - direct field access for performance
+  for (const auto& block : task->blocks_) {
+    // target_pool_id (u64)
+    uint64_t pool_id =
+        block.target_pool_id_.IsNull() ? 0 : block.target_pool_id_.ToU64();
+    for (int i = 0; i < 8; ++i) {
+      out.push_back(static_cast<uint8_t>((pool_id >> (i * 8)) & 0xFF));
+    }
+
+    // block_size (u64)
+    uint64_t block_size = block.block_size_;
+    for (int i = 0; i < 8; ++i) {
+      out.push_back(static_cast<uint8_t>((block_size >> (i * 8)) & 0xFF));
+    }
+
+    // block_offset (u64)
+    uint64_t block_offset = block.block_offset_;
+    for (int i = 0; i < 8; ++i) {
+      out.push_back(static_cast<uint8_t>((block_offset >> (i * 8)) & 0xFF));
+    }
+  }
+
+  return 0;
 }
 
 }  // namespace cte_ffi

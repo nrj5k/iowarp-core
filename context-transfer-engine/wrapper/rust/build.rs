@@ -159,15 +159,106 @@ fn link_zmq_fallback() {
 }
 
 fn main() {
+    use std::io::Write;
+    // Debug: Print all environment variables at the start
+    eprintln!("=== BUILD.RS START ===");
+    eprintln!("Expected environment variables (set by CMake/Corrosion):");
+    eprintln!("  IOWARP_INCLUDE_DIR: Primary include directory (hermes_shm)");
+    eprintln!("  IOWARP_EXTRA_INCLUDES: Colon-separated extra includes (chimaera, CTE, etc.)");
+    eprintln!("  IOWARP_LIB_DIR: Library directory for linking");
+    eprintln!("  IOWARP_ZMQ_LIBS: ZeroMQ library specifications");
+    eprintln!("  IOWARP_ZMQ_LIB_DIRS: ZeroMQ library directories");
+
+    // Write all env vars to a file for debugging
+    let mut file = std::fs::File::create("/tmp/cargo_env_vars.txt").expect("Failed to create file");
+    for (key, value) in std::env::vars() {
+        writeln!(file, "{} = {}", key, value).expect("Failed to write");
+    }
+    file.flush().expect("Failed to flush");
+    eprintln!("Wrote env vars to /tmp/cargo_env_vars.txt");
+
+    eprintln!("Path to env vars file: /tmp/cargo_env_vars.txt");
+
     // Get include and library paths from environment (set by CMake/Corrosion)
     // Fall back to defaults for standalone cargo builds
-    let include_dir =
-        std::env::var("IOWARP_INCLUDE_DIR").unwrap_or_else(|_| "/usr/local/include".to_string());
-    let lib_dir = std::env::var("IOWARP_LIB_DIR").unwrap_or_else(|_| "/usr/local/lib".to_string());
+    let include_dir = match std::env::var("IOWARP_INCLUDE_DIR") {
+        Ok(val) => {
+            eprintln!("DEBUG: IOWARP_INCLUDE_DIR = {}", val);
+            val
+        }
+        Err(_) => {
+            eprintln!("DEBUG: IOWARP_INCLUDE_DIR not set, using default");
+            // Default to workspace root for standalone builds
+            let workspace_root = env::var("CMAKE_SOURCE_DIR").unwrap_or_else(|_| {
+                // Fallback: try to infer from CARGO_MANIFEST_DIR
+                let manifest_dir =
+                    env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+                format!("{}/../../..", manifest_dir)
+            });
+            format!("{}/context-transport-primitives/include", workspace_root)
+        }
+    };
+    let lib_dir = match std::env::var("IOWARP_LIB_DIR") {
+        Ok(val) => {
+            eprintln!("DEBUG: IOWARP_LIB_DIR = {}", val);
+            val
+        }
+        Err(_) => {
+            eprintln!("DEBUG: IOWARP_LIB_DIR not set, using default");
+            // Default to build directory or system lib
+            env::var("CMAKE_BINARY_DIR")
+                .map(|b| format!("{}/bin", b))
+                .unwrap_or_else(|_| "/usr/local/lib".to_string())
+        }
+    };
 
     // Additional include paths for chimaera and other dependencies
     // Multiple paths separated by colons
-    let extra_includes = std::env::var("IOWARP_EXTRA_INCLUDES").unwrap_or_default();
+    let extra_includes = match std::env::var("IOWARP_EXTRA_INCLUDES") {
+        Ok(val) => {
+            eprintln!("DEBUG: IOWARP_EXTRA_INCLUDES = {}", val);
+            val
+        }
+        Err(_) => {
+            eprintln!("DEBUG: IOWARP_EXTRA_INCLUDES not set, using computed defaults");
+            // Compute default extra includes from workspace root
+            let workspace_root = env::var("CMAKE_SOURCE_DIR").unwrap_or_else(|_| {
+                let manifest_dir =
+                    env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+                format!("{}/../../..", manifest_dir)
+            });
+            format!(
+                "{}/context-runtime/include:{}/context-transfer-engine/core/include",
+                workspace_root, workspace_root
+            )
+        }
+    };
+
+    // Split extra_includes and add fallback paths for cereal if not present
+    let mut include_paths: Vec<String> = extra_includes
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+
+    // Check if cereal is already in the include paths
+    let has_cereal = include_paths.iter().any(|path| {
+        let cereal_path = format!("{}/cereal", path);
+        std::path::Path::new(&cereal_path).exists()
+    });
+
+    // Add cereal fallback paths if not already present
+    if !has_cereal {
+        eprintln!("DEBUG: Cereal not found in IOWARP_EXTRA_INCLUDES, adding fallback paths");
+        let cereal_fallbacks = vec!["/usr/local/include".to_string(), "/usr/include".to_string()];
+        for fallback in cereal_fallbacks {
+            let cereal_path = format!("{}/cereal", fallback);
+            if std::path::Path::new(&cereal_path).exists() {
+                eprintln!("DEBUG: Found cereal at {}", fallback);
+                include_paths.push(fallback);
+            }
+        }
+    }
 
     // Build the CXX bridge and C++ shim
     let mut build = cxx_build::bridge("src/ffi.rs");
@@ -197,9 +288,15 @@ fn main() {
         .flag("-Wno-pedantic");
 
     // Add extra include directories
-    for path in extra_includes.split(':').filter(|s| !s.is_empty()) {
+    eprintln!("DEBUG: Adding extra include directories:");
+    for path in &include_paths {
+        eprintln!("  - {}", path);
         build.include(path);
     }
+
+    // Debug: Print all include paths being used
+    eprintln!("DEBUG: Primary include directory: {}", include_dir);
+    eprintln!("DEBUG: Library directory: {}", lib_dir);
 
     build.compile("cte_shim");
 

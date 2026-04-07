@@ -89,6 +89,7 @@
 pub mod error;
 pub mod ffi;
 pub mod types;
+pub mod tier_tracker;
 
 // Feature-gated API modules
 #[cfg(feature = "async")]
@@ -102,6 +103,15 @@ pub use error::{CteError, CteResult};
 pub use ffi::CteTelemetry;
 pub use types::{
     BdevType, ChimaeraMode, CteOp, CteTagId, PoolQuery, SteadyTime,
+};
+
+// Re-export tier tracking types
+pub use tier_tracker::{
+    TierMovementTracker,
+    TierMovementEvent,
+    BlobKey,
+    CachedBlobState,
+    RegistryEntry,
 };
 
 // Re-export API based on features
