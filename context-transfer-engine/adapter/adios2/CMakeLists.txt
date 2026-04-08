@@ -89,3 +89,8 @@ install(
   ARCHIVE DESTINATION ${WRP_CTE_INSTALL_LIB_DIR}
   RUNTIME DESTINATION ${WRP_CTE_INSTALL_BIN_DIR}
 )
+
+# Install default ADIOS2 config
+install(FILES iowarp_default.xml
+    DESTINATION share/iowarp/adios2
+)
