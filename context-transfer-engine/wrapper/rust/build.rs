@@ -250,7 +250,19 @@ fn main() {
     // Add cereal fallback paths if not already present
     if !has_cereal {
         eprintln!("DEBUG: Cereal not found in IOWARP_EXTRA_INCLUDES, adding fallback paths");
-        let cereal_fallbacks = vec!["/usr/local/include".to_string(), "/usr/include".to_string()];
+
+        // Primary fallback: Check the build directory for CMake-fetched cereal
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let workspace_root = format!("{}/../../..", manifest_dir);
+
+        let cereal_fallbacks = vec![
+            // CMake FetchContent location
+            format!("{}/build/_deps/cereal-src/include", workspace_root),
+            // System locations
+            "/usr/local/include".to_string(),
+            "/usr/include".to_string(),
+        ];
+
         for fallback in cereal_fallbacks {
             let cereal_path = format!("{}/cereal", fallback);
             if std::path::Path::new(&cereal_path).exists() {

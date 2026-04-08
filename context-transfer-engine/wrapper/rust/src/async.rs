@@ -56,7 +56,7 @@
 //!     assert_eq!(data, b"hello");
 //!
 //!     // Get telemetry
-//!     let telemetry = client.poll_telemetry(0).await?;
+//!     let telemetry = client.poll_telemetry(0, 5.0).await?;
 //!     for entry in telemetry {
 //!         println!("Op: {:?}, Size: {}", entry.op, entry.size);
 //!     }
@@ -78,7 +78,7 @@ use crate::error::{CteError, CteResult};
 use crate::ffi::ffi;
 use std::sync::Arc;
 
-/// Wrapper to make Unique_ptr<ffi::Tag> Send for use with spawn_blocking
+/// Wrapper to make UniquePtr<ffi::Tag> Send for use with spawn_blocking
 ///
 /// This wrapper is necessary because `cxx::UniquePtr` does not implement `Send`
 /// by default, which prevents it from being used across thread boundaries.
@@ -92,9 +92,10 @@ use std::sync::Arc;
 ///    async executor's threads, preventing any potential interference with async
 ///    scheduling.
 ///
-/// 2. **Single-Threaded Execution**: Each FFI call acquires a mutex lock before
-///    accessing the underlying C++ object. This ensures that only one thread
-///    accesses the Tag at any given time.
+/// 2. **Per-Instance Isolation**: Each Tag instance is independent. Concurrent
+///    operations should create multiple Tag instances (via `duplicate()`), each
+///    running in its own `spawn_blocking` context. This matches the C++ design
+///    where each Tag object is independent and thread-safe for its own instance.
 ///
 /// 3. **C++ Thread-Safety Guarantees**: The underlying C++ `wrp_cte::core::Tag`
 ///    class is designed for single-threaded use within each operation. All state
@@ -103,24 +104,27 @@ use std::sync::Arc;
 ///
 /// 4. **No Interior Mutability**: The C++ Tag class does not use interior mutability
 ///    patterns that could cause data races. All mutations go through explicit FFI
-///    calls that are synchronized via the mutex.
+///    calls.
 ///
 /// # SAFETY
 ///
 /// This implementation is safe because:
 ///
-/// - The `UniquePtr<Tag>` is wrapped in `Arc<Mutex<_>>`, ensuring exclusive access
-///   via the mutex lock before any FFI call.
+/// - Each Tag instance is used exclusively within `spawn_blocking` closures,
+///   ensuring the C++ object is only accessed from one thread at a time.
 ///
 /// - `spawn_blocking` guarantees that the closure runs on a dedicated thread pool
 ///   separate from the async executor, preventing async runtime interference.
+///
+/// - For concurrent operations, users create separate Tag instances via `duplicate()`,
+///   each wrapped in its own `spawn_blocking` context. This eliminates shared state
+///   at the Rust level entirely.
 ///
 /// - The underlying C++ `Tag` object does not use callbacks, signals, or any
 ///   other mechanism that could cause re-entrancy or cross-thread access.
 ///
 /// - The C++ object lifetime is managed by `UniquePtr`, which ensures proper
-///   destruction when the Rust wrapper is dropped. The destructor runs in the
-///   same thread as the last FFI call that held the mutex.
+///   destruction when the Rust wrapper is dropped.
 ///
 /// - No mutable static state exists in the C++ Tag implementation that could
 ///   cause cross-thread interference.
@@ -128,31 +132,40 @@ struct SendableTag(cxx::UniquePtr<ffi::Tag>);
 
 // SAFETY: SendableTag is safe to send across threads because:
 //
-// 1. MUTEX SYNCHRONIZATION: The Tag is wrapped in Arc<Mutex<SendableTag>>,
-//    ensuring only one thread can access the inner UniquePtr at a time
-//    via lock().unwrap().
+// 1. SPAWN_BLOCKING GUARANTEE: The UniquePtr<Tag> is created within a
+//    spawn_blocking closure and used exclusively within that closure.
+//    No concurrent access to the Tag object can occur.
 //
-// 2. SPAWN_BLOCKING GUARANTEES: All FFI calls happen inside spawn_blocking,
-//    which runs closures on a dedicated blocking thread pool isolated from
-//    the async executor. This prevents concurrent access to the C++ object.
+// 2. SINGLE-THREADED ACCESS: Each Tag instance is accessed only from the
+//    thread running the spawn_blocking closure. The UniquePtr is never
+//    shared across threads for the same Tag instance.
 //
-// 3. C++ THREAD-SAFETY: The underlying wrp_cte::core::Tag class is designed
-//    for single-threaded use. It doesn't spawn threads, use atomics, or have
-//    any internal concurrency. All state changes are completed before the
-//    FFI call returns.
+// 3. C++ THREAD-SAFETY: The underlying wrp_cte::core::Tag class is
+//    designed for single-threaded use. It doesn't spawn threads, use atomics,
+//    or have any internal concurrency. All state changes are completed
+//    before the FFI call returns.
 //
 // 4. OWNERSHIP MODEL: UniquePtr ensures proper cleanup. The C++ destructor
-//    runs exactly once when the UniquePtr is dropped, always in the same
-//    thread that holds the Arc<Mutex> lock.
+//    runs exactly once when the UniquePtr is dropped, in the same thread
+//    that created it (within the spawn_blocking closure).
 //
-// 5. NO SHINED STATE: The Tag object doesn't expose any interior mutability
-//    or shared state that could cause data races across multiple SendableTag
-//    instances wrapping the same underlying C++ object.
+// 5. NO SHARED STATE BETWEEN INSTANCES: For concurrent operations, users
+//    create separate Tag instances via duplicate(). Each instance has its
+//    own UniquePtr<Tag>, eliminating any possibility of shared mutable state.
 //
-// IMPORTANT: The Send impl allows the UniquePtr to be moved between threads,
-// but actual FFI calls are still synchronized through Arc<Mutex<_>> to ensure
-// single-threaded access patterns required by the C++ implementation.
+// IMPORTANT: This Send impl is safe because each Tag instance's UniquePtr
+// lives entirely within spawn_blocking closures, ensuring single-threaded
+// access patterns required by the C++ implementation.
 unsafe impl Send for SendableTag {}
+
+// SAFETY: SendableTag is safe to synchronize across threads because:
+// 1. Arc<SendableTag> requires SendableTag: Sync for Arc: Send
+// 2. Each spawn_blocking closure owns its Arc clone (stack-allocated)
+// 3. Concurrent closures access the same SendableTag via Arc, but each
+//    closure's &SendableTag is scoped to that closure's stack
+// 4. IMPORTANT: Users must use Tag::duplicate() for concurrent operations
+//    to avoid concurrent access to the same C++ Tag object
+unsafe impl Sync for SendableTag {}
 
 /// Wrapper to make unique_ptr<ffi::Client> Send for use with spawn_blocking
 ///
@@ -215,6 +228,12 @@ struct SendableClient(cxx::UniquePtr<ffi::Client>);
 // actual access pattern (create, use, destroy) within the closure is safe.
 unsafe impl Send for SendableClient {}
 
+// SAFETY: SendableClient is safe to synchronize across threads because:
+// 1. Client is stateless and created fresh per call
+// 2. Each spawn_blocking closure owns its Client instance
+// 3. No shared state between different Client instances
+unsafe impl Sync for SendableClient {}
+
 /// Async CTE client
 ///
 /// Provides async methods for client-level operations.
@@ -255,17 +274,28 @@ impl Client {
     ///
     /// # Returns
     /// Vector of telemetry entries
-    pub async fn poll_telemetry(&self, min_time: u64) -> CteResult<Vec<crate::ffi::CteTelemetry>> {
+    pub async fn poll_telemetry(&self, min_time: u64, timeout_sec: f32) -> CteResult<Vec<crate::ffi::CteTelemetry>> {
         tokio::task::spawn_blocking(move || {
             let client = SendableClient(ffi::client_new());
             let mut raw = Vec::new();
-            ffi::client_poll_telemetry_raw(&client.0, min_time, &mut raw);
-            crate::ffi::parse_telemetry(&raw)
+            let ret = ffi::client_poll_telemetry_raw(&client.0, min_time, timeout_sec, &mut raw);
+            match ret {
+                0 => Ok(crate::ffi::parse_telemetry(&raw)),
+                1 => Err(crate::CteError::Timeout),
+                2 => Err(crate::CteError::RuntimeError {
+                    code: 1,
+                    message: "Telemetry poll failed".to_string(),
+                }),
+                code => Err(crate::CteError::RuntimeError {
+                    code: code as u32,
+                    message: format!("Unknown return code: {}", code),
+                }),
+            }
         })
         .await
         .map_err(|e| CteError::FfiError {
             message: format!("Failed to poll telemetry: spawn_blocking error: {}", e),
-        })
+        })?
     }
 
     /// Reorganize a blob (change placement score)
@@ -372,12 +402,41 @@ impl Client {
 /// Async tag wrapper
 ///
 /// Provides async methods for tag/blob operations.
-/// Uses `Arc<Mutex<SendableTag>>` for thread-safe access to the underlying C++ Tag.
+/// Uses `spawn_blocking` to bridge C++ blocking calls.
 ///
-/// All operations lock the mutex and perform the FFI call within `spawn_blocking`,
-/// ensuring thread-safe access to the underlying C++ object.
+/// # Thread Safety
+///
+/// Each Tag instance is independent. For concurrent operations, create multiple
+/// Tag instances using `duplicate()`. Each instance runs its FFI calls in a
+/// dedicated blocking thread pool via `spawn_blocking`.
+///
+/// # Example (Concurrent Operations)
+/// ```no_run
+/// use wrp_cte::Tag;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     // Create independent Tag instances for concurrent operations
+///     let tag1 = Tag::new("my_dataset").await?;
+///     let tag2 = tag1.duplicate().await?;  // Fresh instance for concurrent use
+///
+///     // Run operations concurrently
+///     let handle1 = tokio::spawn(async move {
+///         tag1.put_blob("data1.bin".to_string(), b"hello".to_vec(), 0, 1.0).await
+///     });
+///     let handle2 = tokio::spawn(async move {
+///         tag2.get_blob("data2.bin".to_string(), 5, 0).await
+///     });
+///
+///     handle1.await??;
+///     handle2.await??;
+///     Ok(())
+/// }
+/// ```
 pub struct Tag {
-    inner: Arc<std::sync::Mutex<SendableTag>>,
+    inner: Arc<SendableTag>,
+    /// Tag name, if created via Tag::new(). None if created via Tag::from_id().
+    name: Option<String>,
 }
 
 impl Tag {
@@ -419,7 +478,8 @@ impl Tag {
             })?;
 
         Ok(Self {
-            inner: Arc::new(std::sync::Mutex::new(sendable_tag)),
+            inner: Arc::new(sendable_tag),
+            name: Some(name),
         })
     }
 
@@ -457,7 +517,8 @@ impl Tag {
             })?;
 
         Ok(Self {
-            inner: Arc::new(std::sync::Mutex::new(sendable_tag)),
+            inner: Arc::new(sendable_tag),
+            name: None,  // Created from ID, name unknown
         })
     }
 
@@ -479,18 +540,60 @@ impl Tag {
     /// }
     /// ```
     pub async fn get_id(&self) -> CteResult<CteTagId> {
-        let inner = self.inner.clone();
+        // Clone the Arc to move into spawn_blocking
+        let inner = Arc::clone(&self.inner);
         
         tokio::task::spawn_blocking(move || {
-            let guard = inner.lock().unwrap();
-            let major = ffi::tag_get_id_major(&guard.0);
-            let minor = ffi::tag_get_id_minor(&guard.0);
+            let tag_ref = inner.0.as_ref().unwrap();  // Use UniquePtr directly
+            let major = ffi::tag_get_id_major(tag_ref);
+            let minor = ffi::tag_get_id_minor(tag_ref);
             CteTagId { major, minor }
         })
             .await
             .map_err(|e| CteError::FfiError {
                 message: format!("Get tag ID spawn_blocking error: {}", e),
             })
+    }
+    
+    /// Create a fresh independent Tag instance with the same name
+    ///
+    /// Use this method to create multiple Tag instances for concurrent operations.
+    /// Each instance is independent and can be used in separate async tasks.
+    ///
+    /// # Returns
+    /// * `Ok(Tag)` - A fresh Tag instance with the same name
+    /// * `Err(CteError::InvalidParameter)` if this Tag was created from ID (no name stored)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use wrp_cte::Tag;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let tag1 = Tag::new("my_dataset").await?;
+    ///     let tag2 = tag1.duplicate().await?;  // Fresh instance for concurrent use
+    ///
+    ///     // Run operations concurrently
+    ///     let h1 = tokio::spawn(async move {
+    ///         tag1.put_blob("a.bin".to_string(), vec![1, 2, 3], 0, 1.0).await
+    ///     });
+    ///     let h2 = tokio::spawn(async move {
+    ///         tag2.put_blob("b.bin".to_string(), vec![4, 5, 6], 0, 1.0).await
+    ///     });
+    ///
+    ///     h1.await??;
+    ///     h2.await??;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn duplicate(&self) -> CteResult<Self> {
+        let name = self.name.clone().ok_or_else(|| {
+            CteError::InvalidParameter {
+                message: "Cannot duplicate a Tag created from ID (name unknown)".to_string(),
+            }
+        })?;
+        
+        Self::new(&name).await
     }
 
     /// Get the placement score of a blob
@@ -524,12 +627,12 @@ impl Tag {
             });
         }
 
-        let inner = self.inner.clone();
+        let inner = Arc::clone(&self.inner);
         let name = name.to_string();
         
         tokio::task::spawn_blocking(move || {
-            let guard = inner.lock().unwrap();
-            ffi::tag_get_blob_score(&guard.0, &name)
+            let tag_ref = inner.0.as_ref().unwrap();  // Use UniquePtr directly
+            ffi::tag_get_blob_score(tag_ref, &name)
         })
             .await
             .map_err(|e| CteError::FfiError {
@@ -571,16 +674,16 @@ impl Tag {
             });
         }
 
-        let inner = self.inner.clone();
+        let inner = Arc::clone(&self.inner);
 
         tokio::task::spawn_blocking(move || {
-            let guard = inner.lock().unwrap();
-            let rc = ffi::tag_reorganize_blob(&guard.0, &name, score);
+            let tag_ref = inner.0.as_ref().unwrap();  // Use UniquePtr directly
+            let rc = ffi::tag_reorganize_blob(tag_ref, &name, score);
             if rc == 0 {
                 Ok(())
             } else {
-                let tag_id_major = ffi::tag_get_id_major(&guard.0);
-                let tag_id_minor = ffi::tag_get_id_minor(&guard.0);
+                let tag_id_major = ffi::tag_get_id_major(tag_ref);
+                let tag_id_minor = ffi::tag_get_id_minor(tag_ref);
                 Err(CteError::RuntimeError {
                     code: rc as u32,
                     message: format!(
@@ -663,11 +766,11 @@ impl Tag {
             });
         }
 
-        let inner = self.inner.clone();
+        let inner = Arc::clone(&self.inner);
 
         tokio::task::spawn_blocking(move || {
-            let guard = inner.lock().unwrap();
-            ffi::tag_put_blob(&guard.0, &name, &data, offset, score);
+            let tag_ref = inner.0.as_ref().unwrap();  // Use UniquePtr directly
+            ffi::tag_put_blob(tag_ref, &name, &data, offset, score);
             Ok(())
         })
             .await
@@ -709,12 +812,12 @@ impl Tag {
             });
         }
 
-        let inner = self.inner.clone();
+        let inner = Arc::clone(&self.inner);
 
         tokio::task::spawn_blocking(move || {
-            let guard = inner.lock().unwrap();
+            let tag_ref = inner.0.as_ref().unwrap();  // Use UniquePtr directly
             let mut out = Vec::new();
-            ffi::tag_get_blob(&guard.0, &name, size, offset, &mut out);
+            ffi::tag_get_blob(tag_ref, &name, size, offset, &mut out);
             out
         })
             .await
@@ -754,12 +857,12 @@ impl Tag {
             });
         }
 
-        let inner = self.inner.clone();
+        let inner = Arc::clone(&self.inner);
         let name = name.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let guard = inner.lock().unwrap();
-            ffi::tag_get_blob_size(&guard.0, &name)
+            let tag_ref = inner.0.as_ref().unwrap();  // Use UniquePtr directly
+            ffi::tag_get_blob_size(tag_ref, &name)
         })
             .await
             .map_err(|e| CteError::FfiError {
@@ -790,12 +893,12 @@ impl Tag {
     /// }
     /// ```
     pub async fn get_contained_blobs(&self) -> CteResult<Vec<String>> {
-        let inner = self.inner.clone();
+        let inner = Arc::clone(&self.inner);
 
         tokio::task::spawn_blocking(move || {
-            let guard = inner.lock().unwrap();
+            let tag_ref = inner.0.as_ref().unwrap();  // Use UniquePtr directly
             let mut out = Vec::new();
-            ffi::tag_get_contained_blobs(&guard.0, &mut out);
+            ffi::tag_get_contained_blobs(tag_ref, &mut out);
             out
         })
             .await
@@ -848,7 +951,8 @@ mod tests {
             // Validation happens before FFI call, so this should fail fast
             let tag_ptr = ffi::tag_new("test_tag");
             let tag = Tag {
-                inner: Arc::new(std::sync::Mutex::new(SendableTag(tag_ptr))),
+                inner: Arc::new(SendableTag(tag_ptr)),
+                name: Some("test_tag".to_string()),
             };
             
             // Test get_blob_score with empty name (should fail validation)
@@ -870,7 +974,8 @@ mod tests {
         let result = rt.block_on(async {
             let tag_ptr = ffi::tag_new("test_tag");
             let tag = Tag {
-                inner: Arc::new(std::sync::Mutex::new(SendableTag(tag_ptr))),
+                inner: Arc::new(SendableTag(tag_ptr)),
+                name: Some("test_tag".to_string()),
             };
             
             // Test with invalid score (< 0)

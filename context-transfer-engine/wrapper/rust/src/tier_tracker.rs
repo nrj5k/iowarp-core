@@ -166,7 +166,11 @@ impl TierMovementTracker {
         let mut events = Vec::new();
 
         // Step 1: Poll telemetry for ReorganizeBlob operations (O(1) read)
-        let telemetry = self.client.poll_telemetry(self.last_telemetry_time);
+        // Use 5 second timeout for telemetry polling
+        let telemetry = match self.client.poll_telemetry(self.last_telemetry_time, 5.0) {
+            Ok(t) => t,
+            Err(_) => return events, // Return empty events on error
+        };
 
         for entry in &telemetry {
             // Update logical time tracking

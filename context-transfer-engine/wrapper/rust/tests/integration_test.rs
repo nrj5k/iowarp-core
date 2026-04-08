@@ -108,7 +108,7 @@ mod sync_tests {
             .expect("Blob put should succeed");
         
         // Poll telemetry
-        let telemetry = client.poll_telemetry(0).expect("Telemetry polling should succeed");
+        let telemetry = client.poll_telemetry(0, 5.0).expect("Telemetry polling should succeed");
         
         // Verify telemetry is returned (may be empty if already cleared)
         // Just verify it doesn't panic
@@ -685,7 +685,7 @@ mod async_tests {
         
         // Poll telemetry
         let telemetry = client
-            .poll_telemetry(0)
+            .poll_telemetry(0, 5.0)
             .await
             .expect("Async telemetry polling should succeed");
         

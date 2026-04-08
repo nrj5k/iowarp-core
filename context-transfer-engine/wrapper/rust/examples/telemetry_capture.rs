@@ -80,7 +80,7 @@ fn main() {
     thread::sleep(Duration::from_millis(100));
 
     // Try to poll telemetry - this may fail if telemetry is not yet available
-    match client.poll_telemetry(0) {
+    match client.poll_telemetry(0, 5.0) {
         Ok(telemetry) => {
             println!("      ✓ Captured {} telemetry entries\n", telemetry.len());
 

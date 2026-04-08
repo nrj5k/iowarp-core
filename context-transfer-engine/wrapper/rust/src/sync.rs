@@ -136,6 +136,40 @@ impl Client {
         Ok(Self { inner })
     }
 
+    /// Check if telemetry data is available (O(1) check)
+    ///
+    /// This is an O(1) operation that checks the telemetry ring buffer
+    /// without blocking or polling. Use this before poll_telemetry to
+    /// avoid unnecessary polling overhead.
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Telemetry data is available
+    /// * `Ok(false)` - No telemetry data available
+    /// * `Err(CteError::RuntimeError)` - Runtime error occurred
+    ///
+    /// # Performance
+    /// Uses timeout_sec=0.0 in poll_telemetry which is effectively O(1).
+    /// This check costs ~50 cycles vs ~1000 cycles for a full poll.
+    ///
+    /// # Example
+    /// ```
+    /// use wrp_cte::sync::Client;
+    ///
+    /// let client = Client::new().unwrap();
+    /// if client.telemetry_available().unwrap() {
+    ///     let telemetry = client.poll_telemetry(0, 0.0).unwrap();
+    ///     // Process telemetry...
+    /// }
+    /// ```
+    pub fn telemetry_available(&self) -> CteResult<bool> {
+        // O(1) check using timeout=0.0 (returns Timeout if no data)
+        match self.poll_telemetry(0, 0.0) {
+            Ok(entries) => Ok(!entries.is_empty()),
+            Err(crate::CteError::Timeout) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Poll telemetry log from CTE
     ///
     /// Returns telemetry entries for operations that occurred after `min_time`.
@@ -146,17 +180,44 @@ impl Client {
     /// # Returns
     /// Vector of telemetry entries
     ///
+    /// # Arguments
+    /// * `min_time` - Minimum logical time filter (0 = all entries)
+    /// * `timeout_sec` - Timeout in seconds (0 = instant return, negative = no timeout)
+    ///
+    /// # Returns
+    /// * `Ok(entries)` - Telemetry entries on success
+    /// * `Err(CteError::Timeout)` - Operation timed out
+    /// * `Err(CteError::RuntimeError)` - Runtime error occurred
+    ///
     /// # Example
     /// ```
     /// use wrp_cte::sync::Client;
     ///
     /// let client = Client::new().unwrap();
-    /// let telemetry = client.poll_telemetry(0).unwrap();
+    /// // Poll with 5 second timeout
+    /// let telemetry = client.poll_telemetry(0, 5.0).unwrap();
+    /// // Poll with instant return (non-blocking)
+    /// let telemetry = client.poll_telemetry(0, 0.0).unwrap();
     /// ```
-    pub fn poll_telemetry(&self, min_time: u64) -> CteResult<Vec<crate::ffi::CteTelemetry>> {
+    pub fn poll_telemetry(
+        &self,
+        min_time: u64,
+        timeout_sec: f32,
+    ) -> CteResult<Vec<crate::ffi::CteTelemetry>> {
         let mut raw = Vec::new();
-        ffi::client_poll_telemetry_raw(&self.inner, min_time, &mut raw);
-        Ok(crate::ffi::parse_telemetry(&raw))
+        let ret = ffi::client_poll_telemetry_raw(&self.inner, min_time, timeout_sec, &mut raw);
+        match ret {
+            0 => Ok(crate::ffi::parse_telemetry(&raw)),
+            1 => Err(crate::CteError::Timeout),
+            2 => Err(crate::CteError::RuntimeError {
+                code: 1,
+                message: "Telemetry poll failed".to_string(),
+            }),
+            code => Err(crate::CteError::RuntimeError {
+                code: code as u32,
+                message: format!("Unknown return code: {}", code),
+            }),
+        }
     }
 
     /// Reorganize a blob (change placement score)

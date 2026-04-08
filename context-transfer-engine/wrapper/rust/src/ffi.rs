@@ -68,6 +68,9 @@
 //! 4. **Thread Safety**: All FFI functions can be safely called from any
 //!    thread; the C++ implementation handles internal synchronization.
 
+// Import error types from parent module
+use crate::{CteError, CteResult};
+
 /// Telemetry entry size in bytes: op(4) + off(8) + size(8) + tag_major(4) + tag_minor(4) +
 /// blob_hash(8) + mod_time_nanos(8) + read_time_nanos(8) + logical_time(8) = 60 bytes
 pub const TELEMETRY_ENTRY_SIZE: usize = 60;
@@ -402,12 +405,19 @@ pub mod ffi {
         // when the UniquePtr is dropped.
         fn client_new() -> UniquePtr<Client>;
 
-        // Poll telemetry entries after min_time
+        // Poll telemetry entries after min_time with timeout
+        //
+        // Returns: 0 on success with data, 1 on timeout, 2 on error
         //
         // SAFETY: The output vector is properly initialized by Rust before being
         // passed to C++. C++ appends bytes using resize/append, ensuring correct
         // capacity and size management.
-        fn client_poll_telemetry_raw(client: &Client, min_time: u64, out: &mut Vec<u8>);
+        fn client_poll_telemetry_raw(
+            client: &Client,
+            min_time: u64,
+            timeout_sec: f32,
+            out: &mut Vec<u8>,
+        ) -> i32;
 
         // Reorganize blob (change placement score)
         //
@@ -489,11 +499,31 @@ impl Client {
         }
     }
 
-    /// Poll telemetry log
-    pub fn poll_telemetry(&self, min_time: u64) -> Vec<CteTelemetry> {
+    /// Poll telemetry log with timeout
+    ///
+    /// # Arguments
+    /// * `min_time` - Minimum logical time filter (0 = all entries)
+    /// * `timeout_sec` - Timeout in seconds (0 = instant return, negative = no timeout)
+    ///
+    /// # Returns
+    /// * `Ok(entries)` - Telemetry entries on success
+    /// * `Err(CteError::Timeout)` - Operation timed out
+    /// * `Err(CteError::RuntimeError)` - Runtime error occurred
+    pub fn poll_telemetry(&self, min_time: u64, timeout_sec: f32) -> CteResult<Vec<CteTelemetry>> {
         let mut data = Vec::new();
-        ffi::client_poll_telemetry_raw(&self.inner, min_time, &mut data);
-        parse_telemetry(&data)
+        let ret = ffi::client_poll_telemetry_raw(&self.inner, min_time, timeout_sec, &mut data);
+        match ret {
+            0 => Ok(parse_telemetry(&data)),
+            1 => Err(CteError::Timeout),
+            2 => Err(CteError::RuntimeError {
+                code: 1,
+                message: "Telemetry poll failed".to_string(),
+            }),
+            code => Err(CteError::RuntimeError {
+                code: code as u32,
+                message: format!("Unknown return code: {}", code),
+            }),
+        }
     }
 
     /// Reorganize blob
@@ -511,8 +541,11 @@ impl Client {
     /// PERFORMANCE: Pre-allocates buffer, single FFI call
     pub fn get_blob_info(&self, tag_id: &CteTagId, name: &str) -> Result<BlobInfo, i32> {
         let mut data = Vec::with_capacity(256); // Most blobs have few blocks
-        let ret = ffi::client_get_blob_info_raw(&self.inner, tag_id.major, tag_id.minor, name, &mut data);
-        if ret != 0 { return Err(ret); }
+        let ret =
+            ffi::client_get_blob_info_raw(&self.inner, tag_id.major, tag_id.minor, name, &mut data);
+        if ret != 0 {
+            return Err(ret);
+        }
 
         // Parse blob info from flat buffer
         // Format: score(4) + total_size(8) + blocks_count(4) + blocks[...](24 each)

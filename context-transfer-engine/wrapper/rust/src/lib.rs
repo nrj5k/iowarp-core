@@ -59,7 +59,7 @@
 //!     tag.put_blob("data.bin".to_string(), b"hello".to_vec(), 0, 1.0).await;
 //!
 //!     // Get telemetry
-//!     let telemetry = client.poll_telemetry(0).await?;
+//!     let telemetry = client.poll_telemetry(0, 5.0).await?;
 //!     for entry in telemetry {
 //!         println!("Op: {:?}, Size: {}", entry.op, entry.size);
 //!     }
@@ -86,6 +86,7 @@
 //! ```
 
 // Module declarations
+pub mod capability_detector;
 pub mod error;
 pub mod ffi;
 pub mod types;
@@ -194,7 +195,7 @@ mod async_tests {
         let client = Client::new().await.expect("Failed to create client");
 
         // Get telemetry (may be empty if no operations)
-        let telemetry = client.poll_telemetry(0).await.expect("poll_telemetry failed");
+        let telemetry = client.poll_telemetry(0, 5.0).await.expect("poll_telemetry failed");
         // Just verify it doesn't panic
         println!("Got {} telemetry entries", telemetry.len());
     }

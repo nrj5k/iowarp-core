@@ -98,8 +98,9 @@ void tag_get_contained_blobs(const Tag& tag, rust::Vec<rust::String>& out);
 // tag_major:u32, tag_minor:u32, mod_time_nanos:i64, read_time_nanos:i64,
 // logical_time:u64) Total 52 bytes per entry. Caller interprets the byte
 // buffer.
-void client_poll_telemetry_raw(const Client& client, uint64_t min_time,
-                               rust::Vec<uint8_t>& out);
+// Returns: 0 on success with data, 1 on timeout, 2 on error
+int32_t client_poll_telemetry_raw(const Client& client, uint64_t min_time,
+                                  float timeout_sec, rust::Vec<uint8_t>& out);
 
 // GetBlobInfo - returns blob metadata with block placement
 // Format: score(f32) + total_size(u64) + blocks_count(u32) + blocks[...]

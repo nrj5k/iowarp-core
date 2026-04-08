@@ -295,7 +295,7 @@ async fn telemetry_streamer(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                match client.poll_telemetry(0).await {
+                match client.poll_telemetry(0, 5.0).await {
                     Ok(entries) => {
                         error_backoff.reset();
                         let mut stats = monitor.telemetry_stats.write().await;

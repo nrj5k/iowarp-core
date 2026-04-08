@@ -43,3 +43,16 @@ file(CHMOD ${CMAKE_BINARY_DIR}/bin/aneris_telemetry
 )
 
 message(STATUS "Generated aneris_telemetry wrapper: ${CMAKE_BINARY_DIR}/bin/aneris_telemetry")
+
+# ADIOS2 telemetry script
+configure_file(
+    ${CMAKE_CURRENT_LIST_DIR}/Aneris_telemetry_adios.in
+    ${CMAKE_BINARY_DIR}/bin/Aneris_telemetry_adios
+    @ONLY
+)
+
+file(CHMOD ${CMAKE_BINARY_DIR}/bin/Aneris_telemetry_adios 
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+)
+
+message(STATUS "Generated Aneris_telemetry_adios wrapper: ${CMAKE_BINARY_DIR}/bin/Aneris_telemetry_adios")

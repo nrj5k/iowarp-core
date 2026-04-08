@@ -185,10 +185,23 @@ void tag_get_contained_blobs(const Tag& tag, rust::Vec<rust::String>& out) {
 //             blob_hash(u64) + mod_time_nanos(i64) + read_time_nanos(i64) +
 //             logical_time(u64) = 4 + 8 + 8 + 4 + 4 + 8 + 8 + 8 + 8 = 60 bytes
 // per entry
-void client_poll_telemetry_raw(const Client& client, uint64_t min_time,
-                               rust::Vec<uint8_t>& out) {
+// Returns: 0 on success with data, 1 on timeout, 2 on error
+int32_t client_poll_telemetry_raw(const Client& client, uint64_t min_time,
+                                  float timeout_sec, rust::Vec<uint8_t>& out) {
   auto task = client.inner.AsyncPollTelemetryLog(min_time);
-  task.Wait();
+
+  // Wait with timeout (0 means no timeout, but we use passed timeout_sec)
+  bool completed = task.Wait(timeout_sec);
+
+  if (!completed) {
+    // Timeout occurred
+    return 1;
+  }
+
+  // Check for errors
+  if (task->GetReturnCode() != 0) {
+    return 2;
+  }
 
   out.clear();
   out.reserve(task->entries_.size() * 60);
@@ -251,6 +264,8 @@ void client_poll_telemetry_raw(const Client& client, uint64_t min_time,
       out.push_back(static_cast<uint8_t>((logical >> (i * 8)) & 0xFF));
     }
   }
+
+  return 0;  // Success
 }
 
 // GetBlobInfo FFI - performance-critical serialization
