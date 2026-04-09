@@ -49,6 +49,14 @@ endif()
 # Add adapters
 add_subdirectory(adapter)
 
+# Add eBPF I/O interceptor adapter (if enabled)
+if(WRP_CTE_ENABLE_EBPF_ADAPTER)
+    message(STATUS "CTE: eBPF adapter enabled - building eBPF I/O interceptor")
+    add_subdirectory(interceptor-ebpf)
+else()
+    message(STATUS "CTE: eBPF adapter disabled (use -DWRP_CTE_ENABLE_EBPF_ADAPTER=ON to enable)")
+endif()
+
 # Add UVM (GPU virtual memory manager) -- requires CUDA
 add_subdirectory(uvm)
 
@@ -408,94 +416,4 @@ if(WRP_CORE_ENABLE_RUST)
         
         message(STATUS "Generated Aneris_telemetry script: ${CMAKE_BINARY_DIR}/bin/Aneris_telemetry")
     endif()
-endif()
-
-#------------------------------------------------------------------------------
-# eBPF Interceptor Configuration
-#------------------------------------------------------------------------------
-# Build the Aya-based eBPF I/O interceptor
-
-if(WRP_CTE_ENABLE_EBPF)
-    message(STATUS "Configuring eBPF I/O interceptor")
-    
-    # Check for Rust toolchain
-    find_program(CARGO cargo)
-    find_program(RUSTC rustc)
-    
-    if(NOT CARGO OR NOT RUSTC)
-        message(WARNING "Rust toolchain not found. eBPF interceptor will not be built.")
-        set(WRP_CTE_ENABLE_EBPF OFF)
-    else()
-        message(STATUS "Found Rust: ${RUSTC}")
-        
-        # Check for BPF target
-        execute_process(
-            COMMAND ${RUSTC} --print target-list
-            OUTPUT_VARIABLE RUST_TARGETS
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-        
-        if(NOT RUST_TARGETS MATCHES "bpfel-unknown-none")
-            message(WARNING "Rust BPF target not available. Install with: rustup target add bpfel-unknown-none")
-            set(WRP_CTE_ENABLE_EBPF OFF)
-        else()
-            message(STATUS "Rust BPF target: bpfel-unknown-none (available)")
-            
-            # Set paths for new workspace structure
-            # Parent workspace directory (contains interceptor-user, interceptor-ebpf-common, xtask)
-            set(EBPF_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/interceptor-ebpf")
-            # eBPF crate is a subdirectory within the parent workspace
-            # The eBPF crate has its own Cargo.toml with .cargo/config.toml for bpfel target
-            set(EBPF_CRATE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/interceptor-ebpf/interceptor-ebpf")
-
-            # Custom command to build eBPF bytecode
-            # MUST build from workspace root with --target and --profile flags
-            # The workspace-level .cargo/config.toml doesn't apply to eBPF target automatically
-            # Output goes to workspace_root/target/<target>/<profile>/<binary>
-            add_custom_command(
-                OUTPUT ${EBPF_SOURCE_DIR}/target/bpfel-unknown-none/ebpf/interceptor-ebpf
-                WORKING_DIRECTORY ${EBPF_SOURCE_DIR}
-                COMMAND ${CARGO} +nightly build --target bpfel-unknown-none --profile ebpf -p interceptor-ebpf
-                COMMENT "Building eBPF kernel-space program from workspace"
-                VERBATIM
-            )
-
-            # Custom command to build user-space controller
-            # Build from the workspace root directory
-            # Cargo will find interceptor-user package from workspace members
-            add_custom_command(
-                OUTPUT ${EBPF_SOURCE_DIR}/target/release/interceptor-user
-                WORKING_DIRECTORY ${EBPF_SOURCE_DIR}
-                COMMAND ${CARGO} build --release -p interceptor-user
-                DEPENDS ${EBPF_SOURCE_DIR}/target/bpfel-unknown-none/ebpf/interceptor-ebpf
-                COMMENT "Building eBPF user-space controller from workspace"
-                VERBATIM
-            )
-
-            # Custom target
-            add_custom_target(interceptor-ebpf ALL
-                DEPENDS ${EBPF_SOURCE_DIR}/target/release/interceptor-user
-            )
-
-            # Install eBPF bytecode (from workspace target directory)
-            install(FILES
-                ${EBPF_SOURCE_DIR}/target/bpfel-unknown-none/ebpf/interceptor-ebpf
-                DESTINATION lib/interceptor-ebpf
-                RENAME interceptor-ebpf.bpf.o
-            )
-
-            # Install user-space binary (from workspace target directory)
-            install(PROGRAMS
-                ${EBPF_SOURCE_DIR}/target/release/interceptor-user
-                DESTINATION bin
-                RENAME interceptor-ebpf-user
-            )
-            
-            message(STATUS "eBPF I/O interceptor configured")
-            message(STATUS "  Workspace: ${EBPF_SOURCE_DIR}")
-            message(STATUS "  eBPF crate: ${EBPF_CRATE_DIR}")
-        endif()
-    endif()
-else()
-    message(STATUS "eBPF I/O interceptor: DISABLED (enable with -DWRP_CTE_ENABLE_EBPF=ON)")
 endif()

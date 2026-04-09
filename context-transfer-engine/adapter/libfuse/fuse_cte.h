@@ -98,6 +98,40 @@ static inline void CteDelTag(const std::string& tag_name) {
   task.Wait();
 }
 
+/** Escape a string for use as a literal in std::regex */
+static inline std::string RegexEscape(const std::string& s) {
+  std::string out;
+  for (char c : s) {
+    if (c == '.' || c == '[' || c == ']' || c == '(' || c == ')' || c == '{' ||
+        c == '}' || c == '+' || c == '*' || c == '?' || c == '\\' || c == '^' ||
+        c == '$' || c == '|') {
+      out += '\\';
+    }
+    out += c;
+  }
+  return out;
+}
+
+/** Get or create a CTE tag, returning its TagId. Returns null id on failure. */
+static inline wrp_cte::core::TagId CteGetOrCreateTag(const std::string& name) {
+  fprintf(stderr, "[DEBUG] CteGetOrCreateTag: name='%s'\n", name.c_str());
+  auto* cte_client = WRP_CTE_CLIENT;
+  auto task = cte_client->AsyncGetOrCreateTag(name);
+  task.Wait();
+  if (task->GetReturnCode() != 0) return wrp_cte::core::TagId::GetNull();
+  return task->tag_id_;
+}
+
+/** Check if a tag exists by name using TagQuery with exact match */
+static inline bool CteTagExists(const std::string& tag_name) {
+  auto* cte_client = WRP_CTE_CLIENT;
+  // Escape regex special chars and do exact match
+  std::string escaped = RegexEscape(tag_name);
+  auto task = cte_client->AsyncTagQuery(escaped, 1);
+  task.Wait();
+  return task->GetReturnCode() == 0 && !task->results_.empty();
+}
+
 /**
  * Create a directory marker tag for explicit directory creation.
  * Creates tag: ".cte_dir:/path/to/dir"
@@ -122,33 +156,6 @@ static inline bool CteRemoveDir(const std::string& dir_path) {
   return true;
 }
 
-/** Get or create a CTE tag, returning its TagId. Returns null id on failure. */
-static inline wrp_cte::core::TagId CteGetOrCreateTag(const std::string& name) {
-  auto* cte_client = WRP_CTE_CLIENT;
-  auto task = cte_client->AsyncGetOrCreateTag(name);
-  task.Wait();
-  if (task->GetReturnCode() != 0) return wrp_cte::core::TagId::GetNull();
-  return task->tag_id_;
-}
-
-/** Check if a tag exists by name using TagQuery with exact match */
-static inline bool CteTagExists(const std::string& tag_name) {
-  auto* cte_client = WRP_CTE_CLIENT;
-  // Escape regex special chars and do exact match
-  std::string escaped;
-  for (char c : tag_name) {
-    if (c == '.' || c == '[' || c == ']' || c == '(' || c == ')' || c == '{' ||
-        c == '}' || c == '+' || c == '*' || c == '?' || c == '\\' || c == '^' ||
-        c == '$' || c == '|') {
-      escaped += '\\';
-    }
-    escaped += c;
-  }
-  auto task = cte_client->AsyncTagQuery(escaped, 1);
-  task.Wait();
-  return task->GetReturnCode() == 0 && !task->results_.empty();
-}
-
 /**
  * Query CTE for tags that are direct children of a directory path.
  * For directory "/a/b", finds tags matching "^/a/b/[^/]+$".
@@ -159,15 +166,7 @@ static inline std::vector<std::string> CteListDirectChildren(
   auto* cte_client = WRP_CTE_CLIENT;
 
   // Build regex: escape dir_path, then match one path component
-  std::string escaped;
-  for (char c : dir_path) {
-    if (c == '.' || c == '[' || c == ']' || c == '(' || c == ')' || c == '{' ||
-        c == '}' || c == '+' || c == '*' || c == '?' || c == '\\' || c == '^' ||
-        c == '$' || c == '|') {
-      escaped += '\\';
-    }
-    escaped += c;
-  }
+  std::string escaped = RegexEscape(dir_path);
   // Ensure trailing slash
   if (!escaped.empty() && escaped.back() != '/') escaped += '/';
   std::string regex = "^" + escaped + "[^/]+$";
@@ -199,15 +198,7 @@ static inline std::vector<std::string> CteListSubdirs(
   auto* cte_client = WRP_CTE_CLIENT;
 
   // Match any tag that has at least two more path components after dir_path
-  std::string escaped;
-  for (char c : dir_path) {
-    if (c == '.' || c == '[' || c == ']' || c == '(' || c == ')' || c == '{' ||
-        c == '}' || c == '+' || c == '*' || c == '?' || c == '\\' || c == '^' ||
-        c == '$' || c == '|') {
-      escaped += '\\';
-    }
-    escaped += c;
-  }
+  std::string escaped = RegexEscape(dir_path);
   if (!escaped.empty() && escaped.back() != '/') escaped += '/';
   // Match tags with at least one more slash after the child component
   std::string regex = "^" + escaped + "[^/]+/.*";
@@ -236,20 +227,18 @@ static inline std::vector<std::string> CteListSubdirs(
 }
 
 /**
- * Check if a directory path has any tags underneath it.
- * A directory exists if any tag starts with "dir_path/".
+ * Check if a directory exists (either explicit marker or implicit from tags).
+ * Checks both:
+ * - Explicit marker (.cte_dir:/path)
+ * - Implicit directory (any tags under /path/)
  */
 static inline bool CteDirExists(const std::string& dir_path) {
+  // Check if explicit marker exists
+  if (CteIsExplicitDir(dir_path)) return true;
+
+  // Check if implicit directory exists (any tags under this path)
   auto* cte_client = WRP_CTE_CLIENT;
-  std::string escaped;
-  for (char c : dir_path) {
-    if (c == '.' || c == '[' || c == ']' || c == '(' || c == ')' || c == '{' ||
-        c == '}' || c == '+' || c == '*' || c == '?' || c == '\\' || c == '^' ||
-        c == '$' || c == '|') {
-      escaped += '\\';
-    }
-    escaped += c;
-  }
+  std::string escaped = RegexEscape(dir_path);
   if (!escaped.empty() && escaped.back() != '/') escaped += '/';
   std::string regex = "^" + escaped + ".*";
   auto task = cte_client->AsyncTagQuery(regex, 1);
@@ -354,20 +343,6 @@ static inline bool CteGetBlob(const wrp_cte::core::TagId& tag_id,
   if (ok) memcpy(data, shm_buf.ptr_, data_size);
   ipc_manager->FreeBuffer(shm_buf);
   return ok;
-}
-
-/** Escape a string for use as a literal in std::regex */
-static inline std::string RegexEscape(const std::string& s) {
-  std::string out;
-  for (char c : s) {
-    if (c == '.' || c == '[' || c == ']' || c == '(' || c == ')' || c == '{' ||
-        c == '}' || c == '+' || c == '*' || c == '?' || c == '\\' || c == '^' ||
-        c == '$' || c == '|') {
-      out += '\\';
-    }
-    out += c;
-  }
-  return out;
 }
 
 }  // namespace wrp::cae::fuse

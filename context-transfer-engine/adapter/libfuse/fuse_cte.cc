@@ -173,6 +173,7 @@ static int cte_fuse_readdir(const char* path, void* buf, fuse_fill_dir_t filler,
 }
 
 static int cte_fuse_mkdir(const char* path, mode_t mode) {
+  fprintf(stderr, "[DEBUG] cte_fuse_mkdir called: path='%s', mode=0%o\n", path, mode);
   (void)mode;
   std::string p(path);
 
@@ -180,11 +181,19 @@ static int cte_fuse_mkdir(const char* path, mode_t mode) {
   if (CteTagExists(p)) return -EEXIST;
 
   // Check if already exists as explicit directory
-  if (CteIsExplicitDir(p)) return -EEXIST;  // Already explicit
+  if (CteIsExplicitDir(p)) {
+    fprintf(stderr, "[DEBUG] mkdir: path='%s' already exists as explicit directory\n", path);
+    return -EEXIST;  // Already explicit
+  }
   // Implicit directories are OK to "promote" to explicit
 
   // Create directory marker
-  if (!CteMakeDir(p)) return -EIO;
+  fprintf(stderr, "[DEBUG] mkdir: creating directory marker for path='%s'\n", path);
+  if (!CteMakeDir(p)) {
+    fprintf(stderr, "[DEBUG] mkdir: CteMakeDir failed for path='%s'\n", path);
+    return -EIO;
+  }
+  fprintf(stderr, "[DEBUG] mkdir: successfully created path='%s'\n", path);
   return 0;
 }
 
