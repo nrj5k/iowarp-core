@@ -35,7 +35,6 @@
 #include <chimaera/comutex.h>
 #include <chimaera/work_orchestrator.h>
 #include <chimaera/worker.h>
-
 #include <hermes_shm/serialize/msgpack_wrapper.h>
 
 #include <cmath>
@@ -51,7 +50,7 @@ namespace chimaera::bdev {
 // WorkerIOContext Implementation
 //===========================================================================
 
-bool WorkerIOContext::Init(const std::string &file_path, chi::u32 io_depth,
+bool WorkerIOContext::Init(const std::string& file_path, chi::u32 io_depth,
                            chi::u32 worker_id) {
   if (is_initialized_) {
     return true;  // Already initialized
@@ -72,9 +71,8 @@ bool WorkerIOContext::Init(const std::string &file_path, chi::u32 io_depth,
   }
 
   is_initialized_ = true;
-  HLOG(kDebug,
-       "Worker {} I/O context initialized: event_fd={}",
-       worker_id, async_io_->GetEventFd());
+  HLOG(kDebug, "Worker {} I/O context initialized: event_fd={}", worker_id,
+       async_io_->GetEventFd());
   return true;
 }
 
@@ -93,12 +91,12 @@ void WorkerIOContext::Cleanup() {
 
 // Block size constants (in bytes) - 4KB, 16KB, 32KB, 64KB, 128KB, 1MB
 static const size_t kBlockSizes[] = {
-    4096,     // 4KB
-    16384,    // 16KB
-    32768,    // 32KB
-    65536,    // 64KB
-    131072,   // 128KB
-    1048576   // 1MB
+    4096,    // 4KB
+    16384,   // 16KB
+    32768,   // 32KB
+    65536,   // 64KB
+    131072,  // 128KB
+    1048576  // 1MB
 };
 
 //===========================================================================
@@ -111,7 +109,7 @@ static const size_t kBlockSizes[] = {
  * @param out_block_size Output parameter for the actual block size
  * @return Block type index, or -1 if larger than all cached sizes
  */
-static int FindBlockTypeForSize(size_t io_size, size_t &out_block_size) {
+static int FindBlockTypeForSize(size_t io_size, size_t& out_block_size) {
   // Find the next block size that is larger than or equal to io_size
   for (int i = 0; i < static_cast<int>(BlockSizeCategory::kMaxCategories);
        ++i) {
@@ -134,7 +132,7 @@ WorkerBlockMap::WorkerBlockMap() {
   blocks_.resize(static_cast<size_t>(BlockSizeCategory::kMaxCategories));
 }
 
-bool WorkerBlockMap::AllocateBlock(int block_type, Block &block) {
+bool WorkerBlockMap::AllocateBlock(int block_type, Block& block) {
   if (block_type < 0 ||
       block_type >= static_cast<int>(BlockSizeCategory::kMaxCategories)) {
     return false;
@@ -177,7 +175,7 @@ int GlobalBlockMap::FindBlockType(size_t io_size) {
   return FindBlockTypeForSize(io_size, block_size);
 }
 
-bool GlobalBlockMap::AllocateBlock(int worker, size_t io_size, Block &block) {
+bool GlobalBlockMap::AllocateBlock(int worker, size_t io_size, Block& block) {
   if (worker < 0 || static_cast<size_t>(worker) >= worker_maps_.size()) {
     return false;
   }
@@ -212,7 +210,7 @@ bool GlobalBlockMap::AllocateBlock(int worker, size_t io_size, Block &block) {
   return false;
 }
 
-bool GlobalBlockMap::FreeBlock(int worker, Block &block) {
+bool GlobalBlockMap::FreeBlock(int worker, Block& block) {
   if (worker < 0 || static_cast<size_t>(worker) >= worker_maps_.size()) {
     return false;
   }
@@ -237,7 +235,7 @@ void Heap::Init(chi::u64 total_size, chi::u32 alignment) {
   heap_.store(0);
 }
 
-bool Heap::Allocate(size_t block_size, int block_type, Block &block) {
+bool Heap::Allocate(size_t block_size, int block_type, Block& block) {
   // Align the requested block size to alignment boundary for O_DIRECT I/O
   // Formula: aligned_size = ((block_size + alignment_ - 1) / alignment_) *
   // alignment_
@@ -291,7 +289,7 @@ Runtime::~Runtime() {
 
 bool Runtime::InitializeWorkerIOContexts() {
   // Pre-allocate vector based on actual number of workers
-  chi::WorkOrchestrator *work_orchestrator = CHI_WORK_ORCHESTRATOR;
+  chi::WorkOrchestrator* work_orchestrator = CHI_WORK_ORCHESTRATOR;
   size_t num_workers =
       work_orchestrator ? work_orchestrator->GetWorkerCount() : 16;
   worker_io_contexts_.resize(num_workers);
@@ -300,13 +298,13 @@ bool Runtime::InitializeWorkerIOContexts() {
 }
 
 void Runtime::CleanupWorkerIOContexts() {
-  for (auto &ctx : worker_io_contexts_) {
+  for (auto& ctx : worker_io_contexts_) {
     ctx.Cleanup();
   }
   worker_io_contexts_.clear();
 }
 
-WorkerIOContext *Runtime::GetWorkerIOContext(size_t worker_id) {
+WorkerIOContext* Runtime::GetWorkerIOContext(size_t worker_id) {
   // Check bounds - vector is pre-allocated in InitializeWorkerIOContexts
   if (worker_id >= worker_io_contexts_.size()) {
     HLOG(kWarning, "Worker ID {} exceeds pre-allocated size {}", worker_id,
@@ -314,7 +312,7 @@ WorkerIOContext *Runtime::GetWorkerIOContext(size_t worker_id) {
     return nullptr;
   }
 
-  WorkerIOContext *ctx = &worker_io_contexts_[worker_id];
+  WorkerIOContext* ctx = &worker_io_contexts_[worker_id];
 
   // Lazy initialization: initialize on first access
   if (!ctx->is_initialized_) {
@@ -323,11 +321,12 @@ WorkerIOContext *Runtime::GetWorkerIOContext(size_t worker_id) {
       return nullptr;
     }
 
-    // Register the eventfd with the worker's EventManager for completion notification
+    // Register the eventfd with the worker's EventManager for completion
+    // notification
     int event_fd = ctx->async_io_ ? ctx->async_io_->GetEventFd() : -1;
-    chi::Worker *worker = CHI_CUR_WORKER;
+    chi::Worker* worker = CHI_CUR_WORKER;
     if (worker != nullptr && event_fd >= 0) {
-      auto &em = worker->GetEventManager();
+      auto& em = worker->GetEventManager();
       if (em.AddEvent(event_fd) < 0) {
         HLOG(kWarning, "Failed to register eventfd with worker {} EventManager",
              worker_id);
@@ -352,12 +351,13 @@ chi::TaskStat Runtime::GetTaskStats(chi::u32 method_id) const {
       stat.wall_time_ = static_cast<float>(aligned) / 500.0f;
       return stat;
     }
-    default: return chi::TaskStat();
+    default:
+      return chi::TaskStat();
   }
 }
 
 chi::TaskResume Runtime::Create(hipc::FullPtr<CreateTask> task,
-                                chi::RunContext &ctx) {
+                                chi::RunContext& ctx) {
   // Get the creation parameters
   CreateParams params = task->GetParams();
 
@@ -484,7 +484,7 @@ chi::TaskResume Runtime::Create(hipc::FullPtr<CreateTask> task,
 }
 
 chi::TaskResume Runtime::AllocateBlocks(hipc::FullPtr<AllocateBlocksTask> task,
-                                        chi::RunContext &ctx) {
+                                        chi::RunContext& ctx) {
   HLOG(kDebug,
        "bdev::AllocateBlocks: ENTER - pool_id_=({},{}), size={}, "
        "container_id={}",
@@ -555,7 +555,7 @@ chi::TaskResume Runtime::AllocateBlocks(hipc::FullPtr<AllocateBlocksTask> task,
     // If allocation failed, clean up and return error
     if (!allocated) {
       // Return all allocated blocks to the GlobalBlockMap
-      for (Block &allocated_block : local_blocks) {
+      for (Block& allocated_block : local_blocks) {
         global_block_map_.FreeBlock(worker_id, allocated_block);
       }
       task->blocks_.clear();
@@ -567,7 +567,7 @@ chi::TaskResume Runtime::AllocateBlocks(hipc::FullPtr<AllocateBlocksTask> task,
     // Check if we would exceed max_blocks limit
     if (local_blocks.size() >= max_blocks_per_operation_) {
       // Return all allocated blocks to the GlobalBlockMap
-      for (Block &allocated_block : local_blocks) {
+      for (Block& allocated_block : local_blocks) {
         global_block_map_.FreeBlock(worker_id, allocated_block);
       }
       task->blocks_.clear();
@@ -600,7 +600,7 @@ chi::TaskResume Runtime::AllocateBlocks(hipc::FullPtr<AllocateBlocksTask> task,
 }
 
 chi::TaskResume Runtime::FreeBlocks(hipc::FullPtr<FreeBlocksTask> task,
-                                    chi::RunContext &ctx) {
+                                    chi::RunContext& ctx) {
   // Get worker ID for free operation
   int worker_id = static_cast<int>(GetWorkerID(ctx));
 
@@ -617,7 +617,7 @@ chi::TaskResume Runtime::FreeBlocks(hipc::FullPtr<FreeBlocksTask> task,
 }
 
 chi::TaskResume Runtime::Write(hipc::FullPtr<WriteTask> task,
-                               chi::RunContext &ctx) {
+                               chi::RunContext& ctx) {
   switch (bdev_type_) {
     case BdevType::kFile:
       co_await WriteToFile(task, ctx);
@@ -634,7 +634,7 @@ chi::TaskResume Runtime::Write(hipc::FullPtr<WriteTask> task,
 }
 
 chi::TaskResume Runtime::Read(hipc::FullPtr<ReadTask> task,
-                              chi::RunContext &ctx) {
+                              chi::RunContext& ctx) {
   switch (bdev_type_) {
     case BdevType::kFile:
       co_await ReadFromFile(task, ctx);
@@ -651,59 +651,81 @@ chi::TaskResume Runtime::Read(hipc::FullPtr<ReadTask> task,
 }
 
 chi::TaskResume Runtime::WriteToFile(hipc::FullPtr<WriteTask> task,
-                                     chi::RunContext &ctx) {
+                                     chi::RunContext& ctx) {
   size_t worker_id = GetWorkerID(ctx);
-  WorkerIOContext *io_ctx = GetWorkerIOContext(worker_id);
+  WorkerIOContext* io_ctx = GetWorkerIOContext(worker_id);
 
-  auto *ipc_mgr = CHI_IPC;
+  auto* ipc_mgr = CHI_IPC;
   hipc::FullPtr<char> data_ptr = ipc_mgr->ToFullPtr(task->data_).Cast<char>();
 
   chi::u64 total_bytes_written = 0;
   chi::u64 data_offset = 0;
 
-  for (size_t i = 0; i < task->blocks_.size(); ++i) {
-    const Block &block = task->blocks_[i];
+  // Batch I/O: track pending operations up to io_depth
+  size_t io_depth = static_cast<size_t>(io_depth_);
+  std::vector<std::pair<hshm::IoToken, size_t>> pending_ios;
+  pending_ios.reserve(io_depth);
 
-    chi::u64 remaining = task->length_ - total_bytes_written;
-    if (remaining == 0) break;
-    chi::u64 block_write_size = std::min(remaining, block.size_);
+  size_t block_idx = 0;
+  while (block_idx < task->blocks_.size()) {
+    // Phase 1: Submit batch up to io_depth
+    while (pending_ios.size() < io_depth && block_idx < task->blocks_.size()) {
+      const Block& block = task->blocks_[block_idx];
 
-    void *block_data = data_ptr.ptr_ + data_offset;
+      chi::u64 remaining = task->length_ - total_bytes_written;
+      if (remaining == 0) break;
+      chi::u64 block_write_size = std::min(remaining, block.size_);
 
-    if (io_ctx == nullptr || !io_ctx->is_initialized_ || !io_ctx->async_io_) {
-      HLOG(kError, "WriteToFile called with invalid I/O context");
-      task->return_code_ = 1;
-      task->bytes_written_ = total_bytes_written;
-      co_return;
+      void* block_data = data_ptr.ptr_ + data_offset;
+
+      if (io_ctx == nullptr || !io_ctx->is_initialized_ || !io_ctx->async_io_) {
+        HLOG(kError, "WriteToFile called with invalid I/O context");
+        task->return_code_ = 1;
+        task->bytes_written_ = total_bytes_written;
+        co_return;
+      }
+
+      hshm::IoToken token = io_ctx->async_io_->Write(
+          block_data, static_cast<size_t>(block_write_size),
+          static_cast<off_t>(block.offset_));
+      if (token == hshm::kInvalidIoToken) {
+        HLOG(kError, "Failed to submit async write: offset={}, size={}",
+             block.offset_, block_write_size);
+        task->return_code_ = 2;
+        task->bytes_written_ = total_bytes_written;
+        co_return;
+      }
+
+      pending_ios.push_back({token, block_idx});
+      block_idx++;
     }
 
-    hshm::IoToken token = io_ctx->async_io_->Write(
-        block_data, static_cast<size_t>(block_write_size),
-        static_cast<off_t>(block.offset_));
-    if (token == hshm::kInvalidIoToken) {
-      HLOG(kError, "Failed to submit async write: offset={}, size={}",
-           block.offset_, block_write_size);
-      task->return_code_ = 2;
-      task->bytes_written_ = total_bytes_written;
-      co_return;
+    // Phase 2: Wait for all pending I/Os
+    for (auto& [token, idx] : pending_ios) {
+      const Block& block = task->blocks_[idx];
+      chi::u64 remaining = task->length_ - total_bytes_written;
+      if (remaining == 0) break;
+      chi::u64 block_write_size = std::min(remaining, block.size_);
+
+      hshm::IoResult result;
+      while (!io_ctx->async_io_->IsComplete(token, result)) {
+        co_await chi::yield(0.1);
+      }
+
+      if (result.error_code != 0) {
+        HLOG(kError, "Async write failed: error_code={}", result.error_code);
+        task->return_code_ = 4;
+        task->bytes_written_ = total_bytes_written;
+        co_return;
+      }
+
+      chi::u64 actual_bytes = std::min(
+          static_cast<chi::u64>(result.bytes_transferred), block_write_size);
+      total_bytes_written += actual_bytes;
+      data_offset += actual_bytes;
     }
 
-    hshm::IoResult result;
-    while (!io_ctx->async_io_->IsComplete(token, result)) {
-      co_await chi::yield(10.0);
-    }
-
-    if (result.error_code != 0) {
-      HLOG(kError, "Async write failed: error_code={}", result.error_code);
-      task->return_code_ = 4;
-      task->bytes_written_ = total_bytes_written;
-      co_return;
-    }
-
-    chi::u64 actual_bytes = std::min(
-        static_cast<chi::u64>(result.bytes_transferred), block_write_size);
-    total_bytes_written += actual_bytes;
-    data_offset += actual_bytes;
+    pending_ios.clear();
   }
 
   task->return_code_ = 0;
@@ -714,59 +736,81 @@ chi::TaskResume Runtime::WriteToFile(hipc::FullPtr<WriteTask> task,
 }
 
 chi::TaskResume Runtime::ReadFromFile(hipc::FullPtr<ReadTask> task,
-                                      chi::RunContext &ctx) {
+                                      chi::RunContext& ctx) {
   size_t worker_id = GetWorkerID(ctx);
-  WorkerIOContext *io_ctx = GetWorkerIOContext(worker_id);
+  WorkerIOContext* io_ctx = GetWorkerIOContext(worker_id);
 
-  auto *ipc_mgr = CHI_IPC;
+  auto* ipc_mgr = CHI_IPC;
   hipc::FullPtr<char> data_ptr = ipc_mgr->ToFullPtr(task->data_).Cast<char>();
 
   chi::u64 total_bytes_read = 0;
   chi::u64 data_offset = 0;
 
-  for (size_t i = 0; i < task->blocks_.size(); ++i) {
-    const Block &block = task->blocks_[i];
+  // Batch I/O: track pending operations up to io_depth
+  size_t io_depth = static_cast<size_t>(io_depth_);
+  std::vector<std::pair<hshm::IoToken, size_t>> pending_ios;
+  pending_ios.reserve(io_depth);
 
-    chi::u64 remaining = task->length_ - total_bytes_read;
-    if (remaining == 0) break;
-    chi::u64 block_read_size = std::min(remaining, block.size_);
+  size_t block_idx = 0;
+  while (block_idx < task->blocks_.size()) {
+    // Phase 1: Submit batch up to io_depth
+    while (pending_ios.size() < io_depth && block_idx < task->blocks_.size()) {
+      const Block& block = task->blocks_[block_idx];
 
-    void *block_data = data_ptr.ptr_ + data_offset;
+      chi::u64 remaining = task->length_ - total_bytes_read;
+      if (remaining == 0) break;
+      chi::u64 block_read_size = std::min(remaining, block.size_);
 
-    if (io_ctx == nullptr || !io_ctx->is_initialized_ || !io_ctx->async_io_) {
-      HLOG(kError, "ReadFromFile called with invalid I/O context");
-      task->return_code_ = 1;
-      task->bytes_read_ = total_bytes_read;
-      co_return;
+      void* block_data = data_ptr.ptr_ + data_offset;
+
+      if (io_ctx == nullptr || !io_ctx->is_initialized_ || !io_ctx->async_io_) {
+        HLOG(kError, "ReadFromFile called with invalid I/O context");
+        task->return_code_ = 1;
+        task->bytes_read_ = total_bytes_read;
+        co_return;
+      }
+
+      hshm::IoToken token = io_ctx->async_io_->Read(
+          block_data, static_cast<size_t>(block_read_size),
+          static_cast<off_t>(block.offset_));
+      if (token == hshm::kInvalidIoToken) {
+        HLOG(kError, "Failed to submit async read: offset={}, size={}",
+             block.offset_, block_read_size);
+        task->return_code_ = 2;
+        task->bytes_read_ = total_bytes_read;
+        co_return;
+      }
+
+      pending_ios.push_back({token, block_idx});
+      block_idx++;
     }
 
-    hshm::IoToken token = io_ctx->async_io_->Read(
-        block_data, static_cast<size_t>(block_read_size),
-        static_cast<off_t>(block.offset_));
-    if (token == hshm::kInvalidIoToken) {
-      HLOG(kError, "Failed to submit async read: offset={}, size={}",
-           block.offset_, block_read_size);
-      task->return_code_ = 2;
-      task->bytes_read_ = total_bytes_read;
-      co_return;
+    // Phase 2: Wait for all pending I/Os
+    for (auto& [token, idx] : pending_ios) {
+      const Block& block = task->blocks_[idx];
+      chi::u64 remaining = task->length_ - total_bytes_read;
+      if (remaining == 0) break;
+      chi::u64 block_read_size = std::min(remaining, block.size_);
+
+      hshm::IoResult result;
+      while (!io_ctx->async_io_->IsComplete(token, result)) {
+        co_await chi::yield(0.1);
+      }
+
+      if (result.error_code != 0) {
+        HLOG(kError, "Async read failed: error_code={}", result.error_code);
+        task->return_code_ = 4;
+        task->bytes_read_ = total_bytes_read;
+        co_return;
+      }
+
+      chi::u64 actual_bytes = std::min(
+          static_cast<chi::u64>(result.bytes_transferred), block_read_size);
+      total_bytes_read += actual_bytes;
+      data_offset += actual_bytes;
     }
 
-    hshm::IoResult result;
-    while (!io_ctx->async_io_->IsComplete(token, result)) {
-      co_await chi::yield(10.0);
-    }
-
-    if (result.error_code != 0) {
-      HLOG(kError, "Async read failed: error_code={}", result.error_code);
-      task->return_code_ = 4;
-      task->bytes_read_ = total_bytes_read;
-      co_return;
-    }
-
-    chi::u64 actual_bytes = std::min(
-        static_cast<chi::u64>(result.bytes_transferred), block_read_size);
-    total_bytes_read += actual_bytes;
-    data_offset += actual_bytes;
+    pending_ios.clear();
   }
 
   task->return_code_ = 0;
@@ -777,18 +821,22 @@ chi::TaskResume Runtime::ReadFromFile(hipc::FullPtr<ReadTask> task,
 }
 
 chi::TaskResume Runtime::GetStats(hipc::FullPtr<GetStatsTask> task,
-                                  chi::RunContext &ctx) {
+                                  chi::RunContext& ctx) {
   // Predict wall time from learned model
   chi::TaskStat read_stat = GetTaskStats(Method::kRead);
   chi::TaskStat write_stat = GetTaskStats(Method::kWrite);
   float read_wall_us = InferWallClockTime(Method::kRead, read_stat);
   float write_wall_us = InferWallClockTime(Method::kWrite, write_stat);
-  double read_size_mb = static_cast<double>(read_stat.io_size_) / (1024.0 * 1024.0);
-  double write_size_mb = static_cast<double>(write_stat.io_size_) / (1024.0 * 1024.0);
-  task->metrics_.read_bandwidth_mbps_ = (read_wall_us > 0)
-      ? read_size_mb / (read_wall_us * 1e-6) : perf_metrics_.read_bandwidth_mbps_;
-  task->metrics_.write_bandwidth_mbps_ = (write_wall_us > 0)
-      ? write_size_mb / (write_wall_us * 1e-6) : perf_metrics_.write_bandwidth_mbps_;
+  double read_size_mb =
+      static_cast<double>(read_stat.io_size_) / (1024.0 * 1024.0);
+  double write_size_mb =
+      static_cast<double>(write_stat.io_size_) / (1024.0 * 1024.0);
+  task->metrics_.read_bandwidth_mbps_ =
+      (read_wall_us > 0) ? read_size_mb / (read_wall_us * 1e-6)
+                         : perf_metrics_.read_bandwidth_mbps_;
+  task->metrics_.write_bandwidth_mbps_ =
+      (write_wall_us > 0) ? write_size_mb / (write_wall_us * 1e-6)
+                          : perf_metrics_.write_bandwidth_mbps_;
   task->metrics_.read_latency_us_ = read_wall_us;
   task->metrics_.write_latency_us_ = write_wall_us;
   task->metrics_.iops_ = perf_metrics_.iops_;
@@ -801,9 +849,10 @@ chi::TaskResume Runtime::GetStats(hipc::FullPtr<GetStatsTask> task,
 }
 
 chi::TaskResume Runtime::Destroy(hipc::FullPtr<DestroyTask> task,
-                                 chi::RunContext &ctx) {
-  // Worker I/O contexts (and their AsyncIO instances) are cleaned up by destructor
-  // Note: GlobalBlockMap and Heap cleanup is handled by their destructors
+                                 chi::RunContext& ctx) {
+  // Worker I/O contexts (and their AsyncIO instances) are cleaned up by
+  // destructor Note: GlobalBlockMap and Heap cleanup is handled by their
+  // destructors
 
   task->return_code_ = 0;
   (void)ctx;
@@ -812,7 +861,7 @@ chi::TaskResume Runtime::Destroy(hipc::FullPtr<DestroyTask> task,
 
 void Runtime::InitializeAllocator() {
   // Initialize global block map with actual number of workers
-  chi::WorkOrchestrator *work_orchestrator = CHI_WORK_ORCHESTRATOR;
+  chi::WorkOrchestrator* work_orchestrator = CHI_WORK_ORCHESTRATOR;
   size_t num_workers =
       work_orchestrator ? work_orchestrator->GetWorkerCount() : 16;
   global_block_map_.Init(num_workers);
@@ -829,9 +878,9 @@ size_t Runtime::GetBlockSize(int block_type) {
   return 0;
 }
 
-size_t Runtime::GetWorkerID(chi::RunContext &ctx) {
+size_t Runtime::GetWorkerID(chi::RunContext& ctx) {
   // Get current worker from thread-local storage using CHI_CUR_WORKER macro
-  chi::Worker *worker = CHI_CUR_WORKER;
+  chi::Worker* worker = CHI_CUR_WORKER;
   if (worker == nullptr) {
     return 0;  // Fallback to worker 0 if not in worker context
   }
@@ -866,7 +915,7 @@ void Runtime::WriteToRam(hipc::FullPtr<WriteTask> task) {
 
   // Convert hipc::ShmPtr<> to hipc::FullPtr<char> for data access
   timer.Resume();
-  auto *ipc_mgr = CHI_IPC;
+  auto* ipc_mgr = CHI_IPC;
   hipc::FullPtr<char> data_ptr = ipc_mgr->ToFullPtr(task->data_).Cast<char>();
   timer.Pause();
   t_resolve_ms += timer.GetMsec();
@@ -878,7 +927,7 @@ void Runtime::WriteToRam(hipc::FullPtr<WriteTask> task) {
   // Iterate over all blocks
   timer.Resume();
   for (size_t i = 0; i < task->blocks_.size(); ++i) {
-    const Block &block = task->blocks_[i];
+    const Block& block = task->blocks_[i];
 
     // Calculate how much data to write to this block
     chi::u64 remaining = task->length_ - total_bytes_written;
@@ -927,7 +976,7 @@ void Runtime::WriteToRam(hipc::FullPtr<WriteTask> task) {
 
 void Runtime::ReadFromRam(hipc::FullPtr<ReadTask> task) {
   // Convert hipc::ShmPtr<> to hipc::FullPtr<char> for data access
-  auto *ipc_mgr = CHI_IPC;
+  auto* ipc_mgr = CHI_IPC;
   hipc::FullPtr<char> data_ptr = ipc_mgr->ToFullPtr(task->data_).Cast<char>();
 
   chi::u64 total_bytes_read = 0;
@@ -935,7 +984,7 @@ void Runtime::ReadFromRam(hipc::FullPtr<ReadTask> task) {
 
   // Iterate over all blocks
   for (size_t i = 0; i < task->blocks_.size(); ++i) {
-    const Block &block = task->blocks_[i];
+    const Block& block = task->blocks_[i];
 
     // Calculate how much data to read from this block
     chi::u64 remaining = task->length_ - total_bytes_read;
@@ -977,7 +1026,7 @@ void Runtime::ReadFromRam(hipc::FullPtr<ReadTask> task) {
 chi::u64 Runtime::GetWorkRemaining() const { return 0; }
 
 chi::TaskResume Runtime::Monitor(hipc::FullPtr<MonitorTask> task,
-                                 chi::RunContext &rctx) {
+                                 chi::RunContext& rctx) {
   (void)rctx;
   if (task->query_ == "stats") {
     // Predict wall time from learned model
@@ -985,30 +1034,46 @@ chi::TaskResume Runtime::Monitor(hipc::FullPtr<MonitorTask> task,
     chi::TaskStat write_stat = GetTaskStats(Method::kWrite);
     float read_wall_us = InferWallClockTime(Method::kRead, read_stat);
     float write_wall_us = InferWallClockTime(Method::kWrite, write_stat);
-    double read_size_mb = static_cast<double>(read_stat.io_size_) / (1024.0 * 1024.0);
-    double write_size_mb = static_cast<double>(write_stat.io_size_) / (1024.0 * 1024.0);
-    double read_bw = (read_wall_us > 0)
-        ? read_size_mb / (read_wall_us * 1e-6) : perf_metrics_.read_bandwidth_mbps_;
+    double read_size_mb =
+        static_cast<double>(read_stat.io_size_) / (1024.0 * 1024.0);
+    double write_size_mb =
+        static_cast<double>(write_stat.io_size_) / (1024.0 * 1024.0);
+    double read_bw = (read_wall_us > 0) ? read_size_mb / (read_wall_us * 1e-6)
+                                        : perf_metrics_.read_bandwidth_mbps_;
     double write_bw = (write_wall_us > 0)
-        ? write_size_mb / (write_wall_us * 1e-6) : perf_metrics_.write_bandwidth_mbps_;
+                          ? write_size_mb / (write_wall_us * 1e-6)
+                          : perf_metrics_.write_bandwidth_mbps_;
 
     msgpack::sbuffer sbuf;
     msgpack::packer<msgpack::sbuffer> pk(sbuf);
 
     pk.pack_map(13);
-    pk.pack("pool_name");              pk.pack(pool_name_);
-    pk.pack("bdev_type");              pk.pack(static_cast<chi::u32>(bdev_type_));
-    pk.pack("total_capacity");         pk.pack(file_size_);
-    pk.pack("remaining_capacity");     pk.pack(heap_.GetRemainingSize());
-    pk.pack("read_bandwidth_mbps");    pk.pack(read_bw);
-    pk.pack("write_bandwidth_mbps");   pk.pack(write_bw);
-    pk.pack("read_latency_us");        pk.pack(static_cast<double>(read_wall_us));
-    pk.pack("write_latency_us");       pk.pack(static_cast<double>(write_wall_us));
-    pk.pack("iops");                   pk.pack(perf_metrics_.iops_);
-    pk.pack("total_reads");            pk.pack(total_reads_.load());
-    pk.pack("total_writes");           pk.pack(total_writes_.load());
-    pk.pack("total_bytes_read");       pk.pack(total_bytes_read_.load());
-    pk.pack("total_bytes_written");    pk.pack(total_bytes_written_.load());
+    pk.pack("pool_name");
+    pk.pack(pool_name_);
+    pk.pack("bdev_type");
+    pk.pack(static_cast<chi::u32>(bdev_type_));
+    pk.pack("total_capacity");
+    pk.pack(file_size_);
+    pk.pack("remaining_capacity");
+    pk.pack(heap_.GetRemainingSize());
+    pk.pack("read_bandwidth_mbps");
+    pk.pack(read_bw);
+    pk.pack("write_bandwidth_mbps");
+    pk.pack(write_bw);
+    pk.pack("read_latency_us");
+    pk.pack(static_cast<double>(read_wall_us));
+    pk.pack("write_latency_us");
+    pk.pack(static_cast<double>(write_wall_us));
+    pk.pack("iops");
+    pk.pack(perf_metrics_.iops_);
+    pk.pack("total_reads");
+    pk.pack(total_reads_.load());
+    pk.pack("total_writes");
+    pk.pack(total_writes_.load());
+    pk.pack("total_bytes_read");
+    pk.pack(total_bytes_read_.load());
+    pk.pack("total_bytes_written");
+    pk.pack(total_bytes_written_.load());
 
     task->results_[container_id_] = std::string(sbuf.data(), sbuf.size());
   }
