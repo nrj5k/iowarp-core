@@ -227,6 +227,16 @@ static inline std::vector<std::string> CteListSubdirs(
 }
 
 /**
+ * Check if directory has an explicit marker.
+ * @param dir_path Absolute path of directory
+ * @return true if explicit marker exists
+ */
+static inline bool CteIsExplicitDir(const std::string& dir_path) {
+  std::string marker_tag = ".cte_dir:" + dir_path;
+  return CteTagExists(marker_tag);
+}
+
+/**
  * Check if a directory exists (either explicit marker or implicit from tags).
  * Checks both:
  * - Explicit marker (.cte_dir:/path)
@@ -244,16 +254,6 @@ static inline bool CteDirExists(const std::string& dir_path) {
   auto task = cte_client->AsyncTagQuery(regex, 1);
   task.Wait();
   return task->GetReturnCode() == 0 && !task->results_.empty();
-}
-
-/**
- * Check if directory has an explicit marker.
- * @param dir_path Absolute path of directory
- * @return true if explicit marker exists
- */
-static inline bool CteIsExplicitDir(const std::string& dir_path) {
-  std::string marker_tag = ".cte_dir:" + dir_path;
-  return CteTagExists(marker_tag);
 }
 
 /**
