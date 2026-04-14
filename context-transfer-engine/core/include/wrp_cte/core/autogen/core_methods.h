@@ -2,6 +2,7 @@
 #define WRP_CTE_CORE_AUTOGEN_METHODS_H_
 
 #include <chimaera/chimaera.h>
+
 #include <string>
 #include <vector>
 
@@ -29,11 +30,12 @@ GLOBAL_CONST chi::u32 kReorganizeBlob = 17;
 GLOBAL_CONST chi::u32 kDelBlob = 18;
 GLOBAL_CONST chi::u32 kDelTag = 19;
 GLOBAL_CONST chi::u32 kGetTagSize = 20;
-GLOBAL_CONST chi::u32 kPollTelemetryLog = 21;
-GLOBAL_CONST chi::u32 kGetBlobScore = 22;
-GLOBAL_CONST chi::u32 kGetBlobSize = 23;
-GLOBAL_CONST chi::u32 kGetContainedBlobs = 24;
-GLOBAL_CONST chi::u32 kGetBlobInfo = 25;
+GLOBAL_CONST chi::u32 kGetTag = 21;
+GLOBAL_CONST chi::u32 kPollTelemetryLog = 22;
+GLOBAL_CONST chi::u32 kGetBlobScore = 23;
+GLOBAL_CONST chi::u32 kGetBlobSize = 24;
+GLOBAL_CONST chi::u32 kGetContainedBlobs = 25;
+GLOBAL_CONST chi::u32 kGetBlobInfo = 26;
 GLOBAL_CONST chi::u32 kTagQuery = 30;
 GLOBAL_CONST chi::u32 kBlobQuery = 31;
 GLOBAL_CONST chi::u32 kGetTargetInfo = 32;
@@ -59,11 +61,12 @@ inline const std::vector<std::string>& GetMethodNames() {
     v[18] = "DelBlob";
     v[19] = "DelTag";
     v[20] = "GetTagSize";
-    v[21] = "PollTelemetryLog";
-    v[22] = "GetBlobScore";
-    v[23] = "GetBlobSize";
-    v[24] = "GetContainedBlobs";
-    v[25] = "GetBlobInfo";
+    v[21] = "GetTag";
+    v[22] = "PollTelemetryLog";
+    v[23] = "GetBlobScore";
+    v[24] = "GetBlobSize";
+    v[25] = "GetContainedBlobs";
+    v[26] = "GetBlobInfo";
     v[30] = "TagQuery";
     v[31] = "BlobQuery";
     v[32] = "GetTargetInfo";

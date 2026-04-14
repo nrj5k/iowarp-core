@@ -415,6 +415,23 @@ chi::PoolQuery Runtime::ScheduleTask(const hipc::FullPtr<chi::Task>& task) {
       return chi::PoolQuery::DirectHash(hash_value);
     }
 
+    // GetTag: read-only tag lookup - same routing as GetOrCreateTag
+    case Method::kGetTag: {
+      auto typed = task.template Cast<GetTagTask>();
+      std::string tag_name = typed->tag_name_.str();
+      bool tag_exists = false;
+      {
+        chi::ScopedCoRwReadLock lock(tag_map_lock_);
+        tag_exists = (tag_name_to_id_.find(tag_name) != nullptr);
+      }
+      if (tag_exists) {
+        return chi::PoolQuery::Local();
+      }
+      std::hash<std::string> string_hasher;
+      chi::u32 hash_value = static_cast<chi::u32>(string_hasher(tag_name));
+      return chi::PoolQuery::DirectHash(hash_value);
+    }
+
     // Blob operations: hash blob name to container
     case Method::kPutBlob: {
       auto typed = task.template Cast<PutBlobTask>();
@@ -777,6 +794,36 @@ chi::TaskResume Runtime::GetOrCreateTag(
 
   } catch (const std::exception& e) {
     task->return_code_ = 1;
+  }
+  co_return;
+}
+
+/**
+ * Read-only tag lookup. Returns TagId if tag exists, null if not.
+ * Does NOT create a new tag (unlike GetOrCreateTag).
+ */
+chi::TaskResume Runtime::GetTag(hipc::FullPtr<GetTagTask> task,
+                                chi::RunContext& ctx) {
+  (void)ctx;
+  try {
+    std::string tag_name = task->tag_name_.str();
+
+    // Read-only lookup under read lock
+    chi::ScopedCoRwReadLock read_lock(tag_map_lock_);
+    TagId* tag_id_ptr = tag_name_to_id_.find(tag_name);
+
+    if (tag_id_ptr != nullptr) {
+      // Tag found
+      task->tag_id_ = *tag_id_ptr;
+      task->return_code_ = 0;  // Success
+    } else {
+      // Tag not found - return null ID
+      task->tag_id_ = TagId::GetNull();
+      task->return_code_ = 0;  // Successful lookup (just not found)
+    }
+
+  } catch (const std::exception& e) {
+    task->return_code_ = 1;  // Error
   }
   co_return;
 }

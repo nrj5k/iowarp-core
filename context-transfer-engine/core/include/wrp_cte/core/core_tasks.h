@@ -726,7 +726,8 @@ enum class CteOp : chi::u32 {
   kGetOrCreateTag = 3,
   kDelTag = 4,
   kGetTagSize = 5,
-  kReorganizeBlob = 6
+  kReorganizeBlob = 6,
+  kGetTag = 7  // Read-only tag lookup (no creation)
 };
 
 /**
@@ -844,6 +845,61 @@ struct GetOrCreateTagTask : public chi::Task {
   void Aggregate(const hipc::FullPtr<chi::Task>& other_base) {
     Task::Aggregate(other_base);
     Copy(other_base.template Cast<GetOrCreateTagTask>());
+  }
+};
+
+/**
+ * GetTag task - Read-only tag lookup by name
+ * Returns TagId if tag exists, null TagId if not found.
+ * Unlike GetOrCreateTag, this NEVER creates a new tag.
+ */
+struct GetTagTask : public chi::Task {
+  IN chi::priv::string tag_name_;  // Tag name to look up
+  OUT TagId tag_id_;               // Tag ID if found, null if not found
+
+  // Default constructor for SHM
+  GetTagTask()
+      : chi::Task(), tag_name_(HSHM_MALLOC), tag_id_(TagId::GetNull()) {}
+
+  // Emplace constructor
+  explicit GetTagTask(const chi::TaskId& task_id, const chi::PoolId& pool_id,
+                      const chi::PoolQuery& pool_query,
+                      const std::string& tag_name)
+      : chi::Task(task_id, pool_id, pool_query, Method::kGetTag),
+        tag_name_(HSHM_MALLOC, tag_name),
+        tag_id_(TagId::GetNull()) {
+    task_id_ = task_id;
+    pool_id_ = pool_id;
+    method_ = Method::kGetTag;
+    task_flags_.Clear();
+    pool_query_ = pool_query;
+  }
+
+  /** Serialize IN parameters */
+  template <typename Archive>
+  void SerializeIn(Archive& ar) {
+    Task::SerializeIn(ar);
+    ar(tag_name_);
+  }
+
+  /** Serialize OUT parameters */
+  template <typename Archive>
+  void SerializeOut(Archive& ar) {
+    Task::SerializeOut(ar);
+    ar(tag_id_);
+  }
+
+  /** Copy from another GetTagTask */
+  void Copy(const hipc::FullPtr<GetTagTask>& other) {
+    Task::Copy(other.template Cast<chi::Task>());
+    tag_name_ = other->tag_name_;
+    tag_id_ = other->tag_id_;
+  }
+
+  /** Aggregate replica results */
+  void Aggregate(const hipc::FullPtr<chi::Task>& other_base) {
+    Task::Aggregate(other_base);
+    Copy(other_base.template Cast<GetTagTask>());
   }
 };
 

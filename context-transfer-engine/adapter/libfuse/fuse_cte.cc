@@ -62,6 +62,12 @@ static void* cte_fuse_init(struct fuse_conn_info* conn,
   // the number of FUSE operations that reach CTE. This is critical for
   // performance with small writes and overlapping I/O patterns.
   // Tradeoff: Brief inconsistency window (acceptable for CTE use case).
+  //
+  // IMPORTANT: With direct_io=0 + kernel_cache=1, the kernel caches FUSE
+  // file metadata and data. This allows the dynamic linker to mmap() files
+  // from this filesystem. The getattr handler MUST NOT create phantom
+  // files on non-existent paths. See the CRITICAL comment in
+  // cte_fuse_getattr() for details.
   cfg->direct_io = 0;
   cfg->kernel_cache = 1;
 
@@ -107,9 +113,13 @@ static int cte_fuse_getattr(const char* path, struct stat* stbuf,
     return 0;
   }
 
-  // Check if path is a file (tag exists with this exact name)
-  if (CteTagExists(p)) {
-    auto tag_id = CteGetOrCreateTag(p);
+  // Use CteGetTag() (read-only) to look up tag without creating it.
+  // This prevents phantom file creation when the dynamic linker probes
+  // library paths via stat() during library search.
+  // The two-step CteTagExists + CteGetOrCreateTag pattern was replaced
+  // by the single CteGetTag() call that returns null TagId if not found.
+  auto tag_id = CteGetTag(p);
+  if (!tag_id.IsNull()) {
     stbuf->st_mode = S_IFREG | 0644;
     stbuf->st_nlink = 1;
     stbuf->st_uid = getuid();

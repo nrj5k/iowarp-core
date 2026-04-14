@@ -125,6 +125,13 @@ class Runtime : public chi::Container {
       chi::RunContext& ctx);
 
   /**
+   * Read-only tag lookup (Method::kGetTag)
+   * Returns TagId if found, null TagId if not.
+   * Unlike GetOrCreateTag, this NEVER creates a new tag.
+   */
+  chi::TaskResume GetTag(hipc::FullPtr<GetTagTask> task, chi::RunContext& ctx);
+
+  /**
    * Put blob (Method::kPutBlob) - allocates and writes data to blob
    * Returns TaskResume for coroutine-based async operations
    */

@@ -161,7 +161,6 @@ static inline std::string RegexEscape(const std::string& s) {
 
 /** Get or create a CTE tag, returning its TagId. Returns null id on failure. */
 static inline wrp_cte::core::TagId CteGetOrCreateTag(const std::string& name) {
-  fprintf(stderr, "[DEBUG] CteGetOrCreateTag: name='%s'\n", name.c_str());
   auto* cte_client = WRP_CTE_CLIENT;
   auto task = cte_client->AsyncGetOrCreateTag(name);
   task.Wait();
@@ -177,6 +176,22 @@ static inline bool CteTagExists(const std::string& tag_name) {
   auto task = cte_client->AsyncTagQuery(escaped, 1);
   task.Wait();
   return task->GetReturnCode() == 0 && !task->results_.empty();
+}
+
+/**
+ * Get a CTE tag by name, returning its TagId.
+ * Read-only: does NOT create the tag if it doesn't exist.
+ * Returns null TagId if tag doesn't exist or on error.
+ *
+ * Use this in getattr (instead of CteGetOrCreateTag) to avoid
+ * creating phantom files when the dynamic linker probes paths.
+ */
+static inline wrp_cte::core::TagId CteGetTag(const std::string& name) {
+  auto* cte_client = WRP_CTE_CLIENT;
+  auto task = cte_client->AsyncGetTag(name);
+  task.Wait();
+  if (task->GetReturnCode() != 0) return wrp_cte::core::TagId::GetNull();
+  return task->tag_id_;
 }
 
 /**
@@ -368,6 +383,12 @@ static inline bool CtePutBlob(const wrp_cte::core::TagId& tag_id,
   auto task =
       cte_client->AsyncPutBlob(tag_id, blob_name, blob_off, data_size, shm_ptr);
   task.Wait();
+
+  // CRITICAL FIX: Clear the blob_data_ reference in the task before freeing
+  // buffer to prevent any post-completion access to freed memory
+  // (use-after-free bug)
+  task->blob_data_ = hipc::ShmPtr<>::GetNull();
+
   ipc_manager->FreeBuffer(shm_buf);
   return task->GetReturnCode() == 0;
 }
@@ -388,6 +409,12 @@ static inline bool CteGetBlob(const wrp_cte::core::TagId& tag_id,
   task.Wait();
   bool ok = (task->GetReturnCode() == 0);
   if (ok) memcpy(data, shm_buf.ptr_, data_size);
+
+  // CRITICAL FIX: Clear the blob_data_ reference in the task before freeing
+  // buffer to prevent any post-completion access to freed memory
+  // (use-after-free bug)
+  task->blob_data_ = hipc::ShmPtr<>::GetNull();
+
   ipc_manager->FreeBuffer(shm_buf);
   return ok;
 }
