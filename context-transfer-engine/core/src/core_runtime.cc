@@ -654,7 +654,8 @@ chi::TaskResume Runtime::ListTargets(hipc::FullPtr<ListTargetsTask> task,
     task->target_names_.reserve(registered_targets_.size());
     registered_targets_.for_each(
         [&task](const chi::PoolId& target_id, const TargetInfo& target_info) {
-          task->target_names_.push_back(target_info.target_name_);
+          task->target_names_.push_back(
+              chi::priv::string(HSHM_MALLOC, target_info.target_name_));
         });
 
     task->return_code_ = 0;  // Success

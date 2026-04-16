@@ -42,6 +42,7 @@
 #include <vector>
 
 // Main HSHM include
+#include <hermes_shm/data_structures/priv/unordered_map_ll.h>
 #include <hermes_shm/hermes_shm.h>
 #include <hermes_shm/memory/allocator/malloc_allocator.h>
 
@@ -97,8 +98,10 @@ struct Host {
   /**
    * Default constructor
    */
-  Host() : node_id(0), state(NodeState::kAlive),
-           state_changed_at(std::chrono::steady_clock::now()) {}
+  Host()
+      : node_id(0),
+        state(NodeState::kAlive),
+        state_changed_at(std::chrono::steady_clock::now()) {}
 
   /**
    * Constructor with IP address and node ID (required)
@@ -106,8 +109,10 @@ struct Host {
    * @param ip IP address string
    * @param id Node ID (typically offset in hostfile)
    */
-  Host(const std::string &ip, u64 id)
-      : ip_address(ip), node_id(id), state(NodeState::kAlive),
+  Host(const std::string& ip, u64 id)
+      : ip_address(ip),
+        node_id(id),
+        state(NodeState::kAlive),
         state_changed_at(std::chrono::steady_clock::now()) {}
 
   bool IsAlive() const { return state == NodeState::kAlive; }
@@ -118,13 +123,21 @@ struct Host {
    * @param host Host object to print
    * @return Reference to output stream
    */
-  friend std::ostream &operator<<(std::ostream &os, const Host &host) {
-    const char *state_name = "unknown";
+  friend std::ostream& operator<<(std::ostream& os, const Host& host) {
+    const char* state_name = "unknown";
     switch (host.state) {
-      case NodeState::kAlive: state_name = "alive"; break;
-      case NodeState::kProbeFailed: state_name = "probe_failed"; break;
-      case NodeState::kSuspected: state_name = "suspected"; break;
-      case NodeState::kDead: state_name = "dead"; break;
+      case NodeState::kAlive:
+        state_name = "alive";
+        break;
+      case NodeState::kProbeFailed:
+        state_name = "probe_failed";
+        break;
+      case NodeState::kSuspected:
+        state_name = "suspected";
+        break;
+      case NodeState::kDead:
+        state_name = "dead";
+        break;
     }
     os << "Host(ip=" << host.ip_address << ", node_id=" << host.node_id
        << ", state=" << state_name << ")";
@@ -145,16 +158,16 @@ struct UniqueId {
       : major_(major), minor_(minor) {}
 
   // Equality operators
-  HSHM_CROSS_FUN bool operator==(const UniqueId &other) const {
+  HSHM_CROSS_FUN bool operator==(const UniqueId& other) const {
     return major_ == other.major_ && minor_ == other.minor_;
   }
 
-  HSHM_CROSS_FUN bool operator!=(const UniqueId &other) const {
+  HSHM_CROSS_FUN bool operator!=(const UniqueId& other) const {
     return !(*this == other);
   }
 
   // Comparison operators for ordering
-  HSHM_CROSS_FUN bool operator<(const UniqueId &other) const {
+  HSHM_CROSS_FUN bool operator<(const UniqueId& other) const {
     if (major_ != other.major_) return major_ < other.major_;
     return minor_ < other.minor_;
   }
@@ -175,7 +188,7 @@ struct UniqueId {
    * @param str String representation of ID (e.g., "200.0")
    * @return Parsed UniqueId
    */
-  static UniqueId FromString(const std::string &str);
+  static UniqueId FromString(const std::string& str);
 
   /**
    * Convert UniqueId to string format "major.minor"
@@ -191,7 +204,7 @@ struct UniqueId {
 
   // Serialization support
   template <typename Ar>
-  HSHM_CROSS_FUN void serialize(Ar &ar) {
+  HSHM_CROSS_FUN void serialize(Ar& ar) {
     ar(major_, minor_);
   }
 };
@@ -202,7 +215,7 @@ struct UniqueId {
 using PoolId = UniqueId;
 
 // Stream output operator for PoolId (typedef of UniqueId)
-inline std::ostream &operator<<(std::ostream &os, const PoolId &pool_id) {
+inline std::ostream& operator<<(std::ostream& os, const PoolId& pool_id) {
   os << "PoolId(major:" << pool_id.major_ << ", minor:" << pool_id.minor_
      << ")";
   return os;
@@ -240,13 +253,13 @@ struct TaskId {
         net_key_(net_key) {}
 
   // Equality operators
-  HSHM_CROSS_FUN bool operator==(const TaskId &other) const {
+  HSHM_CROSS_FUN bool operator==(const TaskId& other) const {
     return pid_ == other.pid_ && tid_ == other.tid_ && major_ == other.major_ &&
            replica_id_ == other.replica_id_ && unique_ == other.unique_ &&
            node_id_ == other.node_id_ && net_key_ == other.net_key_;
   }
 
-  bool operator!=(const TaskId &other) const { return !(*this == other); }
+  bool operator!=(const TaskId& other) const { return !(*this == other); }
 
   // Convert to u64 for hashing (combine all fields)
   HSHM_CROSS_FUN u64 ToU64() const {
@@ -261,13 +274,13 @@ struct TaskId {
 
   // Serialization support
   template <typename Ar>
-  HSHM_CROSS_FUN void serialize(Ar &ar) {
+  HSHM_CROSS_FUN void serialize(Ar& ar) {
     ar(pid_, tid_, major_, replica_id_, unique_, node_id_, net_key_);
   }
 };
 
 // Stream output operator for TaskId
-inline std::ostream &operator<<(std::ostream &os, const TaskId &task_id) {
+inline std::ostream& operator<<(std::ostream& os, const TaskId& task_id) {
   os << "TaskId(pid:" << task_id.pid_ << ", tid:" << task_id.tid_
      << ", major:" << task_id.major_ << ", replica:" << task_id.replica_id_
      << ", unique:" << task_id.unique_ << ", node:" << task_id.node_id_
@@ -291,7 +304,7 @@ struct LockOwnerId {
       : worker_id_(0), pid_(0), tid_(0), major_(0), node_id_(0) {}
 
   HSHM_CROSS_FUN LockOwnerId(u32 worker_id, u32 pid, u32 tid, u32 major,
-                              u64 node_id)
+                             u64 node_id)
       : worker_id_(worker_id),
         pid_(pid),
         tid_(tid),
@@ -303,14 +316,14 @@ struct LockOwnerId {
            node_id_ == 0;
   }
 
-  HSHM_CROSS_FUN bool operator==(const LockOwnerId &other) const {
+  HSHM_CROSS_FUN bool operator==(const LockOwnerId& other) const {
     if (IsNull() || other.IsNull()) return false;
     return worker_id_ == other.worker_id_ && pid_ == other.pid_ &&
            tid_ == other.tid_ && major_ == other.major_ &&
            node_id_ == other.node_id_;
   }
 
-  HSHM_CROSS_FUN bool operator!=(const LockOwnerId &other) const {
+  HSHM_CROSS_FUN bool operator!=(const LockOwnerId& other) const {
     return !(*this == other);
   }
 
@@ -365,24 +378,24 @@ struct Address {
       : pool_id_(pool_id), group_id_(group_id), minor_id_(minor_id) {}
 
   // Equality operator
-  bool operator==(const Address &other) const {
+  bool operator==(const Address& other) const {
     return pool_id_ == other.pool_id_ && group_id_ == other.group_id_ &&
            minor_id_ == other.minor_id_;
   }
 
   // Inequality operator
-  bool operator!=(const Address &other) const { return !(*this == other); }
+  bool operator!=(const Address& other) const { return !(*this == other); }
 
   // Cereal serialization support
   template <class Archive>
-  void serialize(Archive &ar) {
+  void serialize(Archive& ar) {
     ar(pool_id_, group_id_, minor_id_);
   }
 };
 
 // Hash function for Address to use in std::unordered_map
 struct AddressHash {
-  std::size_t operator()(const Address &addr) const {
+  std::size_t operator()(const Address& addr) const {
     std::size_t h1 = std::hash<u64>{}(addr.pool_id_.ToU64());
     std::size_t h2 = std::hash<GroupId>{}(addr.group_id_);
     std::size_t h3 = std::hash<MinorId>{}(addr.minor_id_);
@@ -499,7 +512,7 @@ struct MigrateInfo {
       : pool_id_(pool_id), container_id_(container_id), dest_(dest) {}
 
   template <typename Ar>
-  void serialize(Ar &ar) {
+  void serialize(Ar& ar) {
     ar(pool_id_, container_id_, dest_);
   }
 };
@@ -516,13 +529,12 @@ struct RecoveryAssignment {
   u32 dest_node_id_;
   u32 dead_node_id_;
 
-  RecoveryAssignment()
-      : container_id_(0), dest_node_id_(0), dead_node_id_(0) {}
+  RecoveryAssignment() : container_id_(0), dest_node_id_(0), dead_node_id_(0) {}
 
   template <typename Ar>
-  void serialize(Ar &ar) {
-    ar(pool_id_, chimod_name_, pool_name_, chimod_params_,
-       container_id_, dest_node_id_, dead_node_id_);
+  void serialize(Ar& ar) {
+    ar(pool_id_, chimod_name_, pool_name_, chimod_params_, container_id_,
+       dest_node_id_, dead_node_id_);
   }
 };
 
@@ -534,6 +546,11 @@ typedef hshm::priv::string<hipc::MallocAllocator> string;
 
 template <typename T>
 using vector = hshm::priv::vector<T, hipc::MallocAllocator>;
+
+// Unordered map with long long keys for efficient lookups
+template <typename Key, typename T>
+using unordered_map_ll =
+    hshm::priv::unordered_map_ll<Key, T, hipc::MallocAllocator>;
 }  // namespace chi::priv
 
 namespace chi::ipc {
@@ -552,14 +569,14 @@ using vector = hipc::vector<T, CHI_MAIN_ALLOC_T>;
 namespace std {
 template <>
 struct hash<chi::UniqueId> {
-  size_t operator()(const chi::UniqueId &id) const {
+  size_t operator()(const chi::UniqueId& id) const {
     return hash<chi::u32>()(id.major_) ^ (hash<chi::u32>()(id.minor_) << 1);
   }
 };
 
 template <>
 struct hash<chi::TaskId> {
-  size_t operator()(const chi::TaskId &id) const {
+  size_t operator()(const chi::TaskId& id) const {
     return hash<chi::u64>()(id.ToU64());
   }
 };

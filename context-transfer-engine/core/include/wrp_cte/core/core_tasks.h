@@ -318,17 +318,18 @@ struct UnregisterTargetTask : public chi::Task {
  * ListTargets task - Return set of registered target names on this node
  */
 struct ListTargetsTask : public chi::Task {
-  OUT std::vector<std::string>
+  OUT chi::priv::vector<std::string>
       target_names_;  // List of registered target names
 
   // SHM constructor
-  ListTargetsTask() : chi::Task() {}
+  ListTargetsTask() : chi::Task(), target_names_(HSHM_MALLOC) {}
 
   // Emplace constructor
   explicit ListTargetsTask(const chi::TaskId& task_id,
                            const chi::PoolId& pool_id,
                            const chi::PoolQuery& pool_query)
-      : chi::Task(task_id, pool_id, pool_query, Method::kListTargets) {
+      : chi::Task(task_id, pool_id, pool_query, Method::kListTargets),
+        target_names_(HSHM_MALLOC) {
     task_id_ = task_id;
     pool_id_ = pool_id;
     method_ = Method::kListTargets;
@@ -1602,11 +1603,11 @@ struct BlobBlockInfo {
  * Returns score, size, and block placement information
  */
 struct GetBlobInfoTask : public chi::Task {
-  IN TagId tag_id_;                        // Tag ID for blob lookup
-  IN chi::priv::string blob_name_;         // Blob name (required)
-  OUT float score_;                        // Blob score (0.0-1.0)
-  OUT chi::u64 total_size_;                // Total blob size in bytes
-  OUT std::vector<BlobBlockInfo> blocks_;  // Block placement info
+  IN TagId tag_id_;                              // Tag ID for blob lookup
+  IN chi::priv::string blob_name_;               // Blob name (required)
+  OUT float score_;                              // Blob score (0.0-1.0)
+  OUT chi::u64 total_size_;                      // Total blob size in bytes
+  OUT chi::priv::vector<BlobBlockInfo> blocks_;  // Block placement info
 
   // SHM constructor
   GetBlobInfoTask()
@@ -1615,7 +1616,7 @@ struct GetBlobInfoTask : public chi::Task {
         blob_name_(HSHM_MALLOC),
         score_(0.0f),
         total_size_(0),
-        blocks_() {}
+        blocks_(HSHM_MALLOC) {}
 
   // Emplace constructor
   explicit GetBlobInfoTask(const chi::TaskId& task_id,
@@ -1626,7 +1627,8 @@ struct GetBlobInfoTask : public chi::Task {
         tag_id_(tag_id),
         blob_name_(HSHM_MALLOC, blob_name),
         score_(0.0f),
-        total_size_(0) {
+        total_size_(0),
+        blocks_(HSHM_MALLOC) {
     task_id_ = task_id;
     pool_id_ = pool_id;
     method_ = Method::kGetBlobInfo;
@@ -1678,11 +1680,13 @@ struct GetBlobInfoTask : public chi::Task {
  * GetContainedBlobs task - Get all blob names contained in a tag
  */
 struct GetContainedBlobsTask : public chi::Task {
-  IN TagId tag_id_;                          // Tag ID to query
-  OUT std::vector<std::string> blob_names_;  // Vector of blob names in the tag
+  IN TagId tag_id_;  // Tag ID to query
+  OUT chi::priv::vector<std::string>
+      blob_names_;  // Vector of blob names in the tag
 
   // SHM constructor
-  GetContainedBlobsTask() : chi::Task(), tag_id_(TagId::GetNull()) {}
+  GetContainedBlobsTask()
+      : chi::Task(), tag_id_(TagId::GetNull()), blob_names_(HSHM_MALLOC) {}
 
   // Emplace constructor
   explicit GetContainedBlobsTask(const chi::TaskId& task_id,
@@ -1690,7 +1694,8 @@ struct GetContainedBlobsTask : public chi::Task {
                                  const chi::PoolQuery& pool_query,
                                  const TagId& tag_id)
       : chi::Task(task_id, pool_id, pool_query, Method::kGetContainedBlobs),
-        tag_id_(tag_id) {
+        tag_id_(tag_id),
+        blob_names_(HSHM_MALLOC) {
     task_id_ = task_id;
     pool_id_ = pool_id;
     method_ = Method::kGetContainedBlobs;
@@ -1753,14 +1758,15 @@ struct TagQueryTask : public chi::Task {
   IN chi::priv::string tag_regex_;
   IN chi::u32 max_tags_;
   OUT chi::u64 total_tags_matched_;
-  OUT std::vector<std::string> results_;
+  OUT chi::priv::vector<std::string> results_;
 
   // SHM constructor
   TagQueryTask()
       : chi::Task(),
         tag_regex_(HSHM_MALLOC),
         max_tags_(0),
-        total_tags_matched_(0) {}
+        total_tags_matched_(0),
+        results_(HSHM_MALLOC) {}
 
   // Emplace constructor
   explicit TagQueryTask(const chi::TaskId& task_id, const chi::PoolId& pool_id,
@@ -1769,7 +1775,8 @@ struct TagQueryTask : public chi::Task {
       : chi::Task(task_id, pool_id, pool_query, Method::kTagQuery),
         tag_regex_(HSHM_MALLOC, tag_regex),
         max_tags_(max_tags),
-        total_tags_matched_(0) {
+        total_tags_matched_(0),
+        results_(HSHM_MALLOC) {
     task_id_ = task_id;
     pool_id_ = pool_id;
     method_ = Method::kTagQuery;
@@ -1840,8 +1847,8 @@ struct BlobQueryTask : public chi::Task {
   IN chi::priv::string blob_regex_;
   IN chi::u32 max_blobs_;
   OUT chi::u64 total_blobs_matched_;
-  OUT std::vector<std::string> tag_names_;
-  OUT std::vector<std::string> blob_names_;
+  OUT chi::priv::vector<std::string> tag_names_;
+  OUT chi::priv::vector<std::string> blob_names_;
 
   // SHM constructor
   BlobQueryTask()
@@ -1849,7 +1856,9 @@ struct BlobQueryTask : public chi::Task {
         tag_regex_(HSHM_MALLOC),
         blob_regex_(HSHM_MALLOC),
         max_blobs_(0),
-        total_blobs_matched_(0) {}
+        total_blobs_matched_(0),
+        tag_names_(HSHM_MALLOC),
+        blob_names_(HSHM_MALLOC) {}
 
   // Emplace constructor
   explicit BlobQueryTask(const chi::TaskId& task_id, const chi::PoolId& pool_id,
@@ -1860,7 +1869,9 @@ struct BlobQueryTask : public chi::Task {
         tag_regex_(HSHM_MALLOC, tag_regex),
         blob_regex_(HSHM_MALLOC, blob_regex),
         max_blobs_(max_blobs),
-        total_blobs_matched_(0) {
+        total_blobs_matched_(0),
+        tag_names_(HSHM_MALLOC),
+        blob_names_(HSHM_MALLOC) {
     task_id_ = task_id;
     pool_id_ = pool_id;
     method_ = Method::kBlobQuery;

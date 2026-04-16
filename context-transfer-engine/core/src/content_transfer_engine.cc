@@ -35,6 +35,7 @@
 #include <wrp_cte/core/content_transfer_engine.h>
 #include <wrp_cte/core/core_client.h>
 #include <wrp_cte/core/core_config.h>
+
 #include <string>
 
 // Define global pointer variable in source file (outside namespace)
@@ -43,7 +44,7 @@ HSHM_DEFINE_GLOBAL_PTR_VAR_CC(wrp_cte::core::ContentTransferEngine,
 
 namespace wrp_cte::core {
 
-bool ContentTransferEngine::ClientInit(const chi::PoolQuery &pool_query) {
+bool ContentTransferEngine::ClientInit(const chi::PoolQuery& pool_query) {
   // Check for race conditions - if already initialized or initializing
   if (is_initialized_) {
     return true;
@@ -51,7 +52,7 @@ bool ContentTransferEngine::ClientInit(const chi::PoolQuery &pool_query) {
   if (is_initializing_) {
     return true;
   }
-  auto *chimaera_manager = CHI_CHIMAERA_MANAGER;
+  auto* chimaera_manager = CHI_CHIMAERA_MANAGER;
   if (chimaera_manager->IsInitializing()) {
     return true;
   }
@@ -66,23 +67,25 @@ bool ContentTransferEngine::ClientInit(const chi::PoolQuery &pool_query) {
   }
 
   // Initialize CTE core client
-  auto *cte_client = WRP_CTE_CLIENT;
+  auto* cte_client = WRP_CTE_CLIENT;
 
-  // Create CreateParams without config - configuration is now provided via chimaera compose
+  // Create CreateParams without config - configuration is now provided via
+  // chimaera compose
   CreateParams params;
 
-  // Create CTE Core container using constants from core_tasks.h and specified pool_query
-  auto create_task = cte_client->AsyncCreate(pool_query,
-                                              wrp_cte::core::kCtePoolName,
-                                              wrp_cte::core::kCtePoolId,
-                                              params);
+  // Create CTE Core container using constants from core_tasks.h and specified
+  // pool_query
+  auto create_task =
+      cte_client->AsyncCreate(pool_query, wrp_cte::core::kCtePoolName,
+                              wrp_cte::core::kCtePoolId, params);
   create_task.Wait();
 
   // Check if Create operation succeeded
   chi::u32 return_code = create_task->GetReturnCode();
   if (return_code != 0) {
-    HLOG(kError, "CTE ClientInit: Failed to create CTE pool '{}' with return code: {}",
-          wrp_cte::core::kCtePoolName, return_code);
+    HLOG(kError,
+         "CTE ClientInit: Failed to create CTE pool '{}' with return code: {}",
+         wrp_cte::core::kCtePoolName, return_code);
     is_initializing_ = false;
     return false;
   }
@@ -100,27 +103,31 @@ bool ContentTransferEngine::ClientInit(const chi::PoolQuery &pool_query) {
 }
 
 std::vector<std::string> ContentTransferEngine::TagQuery(
-    const std::string &tag_re,
-    chi::u32 max_tags,
-    const chi::PoolQuery &pool_query) {
-  auto *cte_client = WRP_CTE_CLIENT;
+    const std::string& tag_re, chi::u32 max_tags,
+    const chi::PoolQuery& pool_query) {
+  auto* cte_client = WRP_CTE_CLIENT;
   auto task = cte_client->AsyncTagQuery(tag_re, max_tags, pool_query);
   task.Wait();
 
-  std::vector<std::string> results = task->results_;
+  std::vector<std::string> results;
+  results.reserve(task->results_.size());
+  for (const auto& result : task->results_) {
+    results.emplace_back(result);
+  }
   return results;
 }
 
-std::vector<std::pair<std::string, std::string>> ContentTransferEngine::BlobQuery(
-    const std::string &tag_re,
-    const std::string &blob_re,
-    chi::u32 max_blobs,
-    const chi::PoolQuery &pool_query) {
-  auto *cte_client = WRP_CTE_CLIENT;
-  auto task = cte_client->AsyncBlobQuery(tag_re, blob_re, max_blobs, pool_query);
+std::vector<std::pair<std::string, std::string>>
+ContentTransferEngine::BlobQuery(const std::string& tag_re,
+                                 const std::string& blob_re, chi::u32 max_blobs,
+                                 const chi::PoolQuery& pool_query) {
+  auto* cte_client = WRP_CTE_CLIENT;
+  auto task =
+      cte_client->AsyncBlobQuery(tag_re, blob_re, max_blobs, pool_query);
   task.Wait();
 
   std::vector<std::pair<std::string, std::string>> results;
+  results.reserve(task->tag_names_.size());
   for (size_t i = 0; i < task->tag_names_.size(); ++i) {
     results.emplace_back(task->tag_names_[i], task->blob_names_[i]);
   }
@@ -128,4 +135,4 @@ std::vector<std::pair<std::string, std::string>> ContentTransferEngine::BlobQuer
   return results;
 }
 
-} // namespace wrp_cte::core
+}  // namespace wrp_cte::core
